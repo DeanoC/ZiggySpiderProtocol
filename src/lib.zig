@@ -3,6 +3,7 @@ pub const protocol_request = @import("protocol_request.zig");
 pub const protocol_response = @import("protocol_response.zig");
 pub const protocol = @import("protocol.zig");
 pub const session_protocol = @import("session_protocol.zig");
+pub const unified = @import("unified.zig");
 
 test {
     _ = protocol_types;
@@ -10,4 +11,5 @@ test {
     _ = protocol_response;
     _ = protocol;
     _ = session_protocol;
+    _ = unified;
 }
