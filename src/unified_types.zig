@@ -14,6 +14,8 @@ pub const Channel = enum {
 };
 
 pub const ControlType = enum {
+    version,
+    version_ack,
     connect,
     connect_ack,
     session_attach,
@@ -22,6 +24,28 @@ pub const ControlType = enum {
     debug_unsubscribe,
     ping,
     pong,
+    metrics,
+    node_invite_create,
+    node_join,
+    node_lease_refresh,
+    node_list,
+    node_get,
+    node_delete,
+    project_create,
+    project_update,
+    project_delete,
+    project_list,
+    project_get,
+    project_mount_set,
+    project_mount_remove,
+    project_mount_list,
+    project_token_rotate,
+    project_token_revoke,
+    project_activate,
+    workspace_status,
+    reconcile_status,
+    project_up,
+    audit_tail,
     err,
     unknown,
 };
@@ -45,6 +69,53 @@ pub const FsrpcType = enum {
     r_clunk,
     t_flush,
     r_flush,
+    fs_t_hello,
+    fs_r_hello,
+    fs_t_exports,
+    fs_r_exports,
+    fs_t_lookup,
+    fs_r_lookup,
+    fs_t_getattr,
+    fs_r_getattr,
+    fs_t_readdirp,
+    fs_r_readdirp,
+    fs_t_symlink,
+    fs_r_symlink,
+    fs_t_setxattr,
+    fs_r_setxattr,
+    fs_t_getxattr,
+    fs_r_getxattr,
+    fs_t_listxattr,
+    fs_r_listxattr,
+    fs_t_removexattr,
+    fs_r_removexattr,
+    fs_t_open,
+    fs_r_open,
+    fs_t_read,
+    fs_r_read,
+    fs_t_close,
+    fs_r_close,
+    fs_t_lock,
+    fs_r_lock,
+    fs_t_create,
+    fs_r_create,
+    fs_t_write,
+    fs_r_write,
+    fs_t_truncate,
+    fs_r_truncate,
+    fs_t_unlink,
+    fs_r_unlink,
+    fs_t_mkdir,
+    fs_r_mkdir,
+    fs_t_rmdir,
+    fs_r_rmdir,
+    fs_t_rename,
+    fs_r_rename,
+    fs_t_statfs,
+    fs_r_statfs,
+    fs_evt_inval,
+    fs_evt_inval_dir,
+    fs_err,
     err,
     unknown,
 };
@@ -55,7 +126,10 @@ pub const ParsedMessage = struct {
     fsrpc_type: ?FsrpcType = null,
 
     id: ?[]u8 = null,
+    correlation_id: ?[]u8 = null,
     tag: ?u32 = null,
+    node: ?u64 = null,
+    handle: ?u64 = null,
 
     fid: ?u32 = null,
     newfid: ?u32 = null,
@@ -73,6 +147,7 @@ pub const ParsedMessage = struct {
 
     pub fn deinit(self: *ParsedMessage, allocator: std.mem.Allocator) void {
         if (self.id) |value| allocator.free(value);
+        if (self.correlation_id) |value| allocator.free(value);
         if (self.mode) |value| allocator.free(value);
         if (self.version) |value| allocator.free(value);
         if (self.data) |value| allocator.free(value);
@@ -84,6 +159,8 @@ pub const ParsedMessage = struct {
 };
 
 pub fn controlTypeFromString(value: []const u8) ControlType {
+    if (std.mem.eql(u8, value, "control.version")) return .version;
+    if (std.mem.eql(u8, value, "control.version_ack")) return .version_ack;
     if (std.mem.eql(u8, value, "control.connect")) return .connect;
     if (std.mem.eql(u8, value, "control.connect_ack")) return .connect_ack;
     if (std.mem.eql(u8, value, "control.session_attach")) return .session_attach;
@@ -92,6 +169,28 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.debug_unsubscribe")) return .debug_unsubscribe;
     if (std.mem.eql(u8, value, "control.ping")) return .ping;
     if (std.mem.eql(u8, value, "control.pong")) return .pong;
+    if (std.mem.eql(u8, value, "control.metrics")) return .metrics;
+    if (std.mem.eql(u8, value, "control.node_invite_create")) return .node_invite_create;
+    if (std.mem.eql(u8, value, "control.node_join")) return .node_join;
+    if (std.mem.eql(u8, value, "control.node_lease_refresh")) return .node_lease_refresh;
+    if (std.mem.eql(u8, value, "control.node_list")) return .node_list;
+    if (std.mem.eql(u8, value, "control.node_get")) return .node_get;
+    if (std.mem.eql(u8, value, "control.node_delete")) return .node_delete;
+    if (std.mem.eql(u8, value, "control.project_create")) return .project_create;
+    if (std.mem.eql(u8, value, "control.project_update")) return .project_update;
+    if (std.mem.eql(u8, value, "control.project_delete")) return .project_delete;
+    if (std.mem.eql(u8, value, "control.project_list")) return .project_list;
+    if (std.mem.eql(u8, value, "control.project_get")) return .project_get;
+    if (std.mem.eql(u8, value, "control.project_mount_set")) return .project_mount_set;
+    if (std.mem.eql(u8, value, "control.project_mount_remove")) return .project_mount_remove;
+    if (std.mem.eql(u8, value, "control.project_mount_list")) return .project_mount_list;
+    if (std.mem.eql(u8, value, "control.project_token_rotate")) return .project_token_rotate;
+    if (std.mem.eql(u8, value, "control.project_token_revoke")) return .project_token_revoke;
+    if (std.mem.eql(u8, value, "control.project_activate")) return .project_activate;
+    if (std.mem.eql(u8, value, "control.workspace_status")) return .workspace_status;
+    if (std.mem.eql(u8, value, "control.reconcile_status")) return .reconcile_status;
+    if (std.mem.eql(u8, value, "control.project_up")) return .project_up;
+    if (std.mem.eql(u8, value, "control.audit_tail")) return .audit_tail;
     if (std.mem.eql(u8, value, "control.error")) return .err;
     return .unknown;
 }
@@ -115,12 +214,61 @@ pub fn fsrpcTypeFromString(value: []const u8) FsrpcType {
     if (std.mem.eql(u8, value, "fsrpc.r_clunk")) return .r_clunk;
     if (std.mem.eql(u8, value, "fsrpc.t_flush")) return .t_flush;
     if (std.mem.eql(u8, value, "fsrpc.r_flush")) return .r_flush;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_hello")) return .fs_t_hello;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_hello")) return .fs_r_hello;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_exports")) return .fs_t_exports;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_exports")) return .fs_r_exports;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_lookup")) return .fs_t_lookup;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_lookup")) return .fs_r_lookup;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_getattr")) return .fs_t_getattr;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_getattr")) return .fs_r_getattr;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_readdirp")) return .fs_t_readdirp;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_readdirp")) return .fs_r_readdirp;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_symlink")) return .fs_t_symlink;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_symlink")) return .fs_r_symlink;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_setxattr")) return .fs_t_setxattr;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_setxattr")) return .fs_r_setxattr;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_getxattr")) return .fs_t_getxattr;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_getxattr")) return .fs_r_getxattr;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_listxattr")) return .fs_t_listxattr;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_listxattr")) return .fs_r_listxattr;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_removexattr")) return .fs_t_removexattr;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_removexattr")) return .fs_r_removexattr;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_open")) return .fs_t_open;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_open")) return .fs_r_open;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_read")) return .fs_t_read;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_read")) return .fs_r_read;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_close")) return .fs_t_close;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_close")) return .fs_r_close;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_lock")) return .fs_t_lock;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_lock")) return .fs_r_lock;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_create")) return .fs_t_create;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_create")) return .fs_r_create;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_write")) return .fs_t_write;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_write")) return .fs_r_write;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_truncate")) return .fs_t_truncate;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_truncate")) return .fs_r_truncate;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_unlink")) return .fs_t_unlink;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_unlink")) return .fs_r_unlink;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_mkdir")) return .fs_t_mkdir;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_mkdir")) return .fs_r_mkdir;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_rmdir")) return .fs_t_rmdir;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_rmdir")) return .fs_r_rmdir;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_rename")) return .fs_t_rename;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_rename")) return .fs_r_rename;
+    if (std.mem.eql(u8, value, "fsrpc.t_fs_statfs")) return .fs_t_statfs;
+    if (std.mem.eql(u8, value, "fsrpc.r_fs_statfs")) return .fs_r_statfs;
+    if (std.mem.eql(u8, value, "fsrpc.e_fs_inval")) return .fs_evt_inval;
+    if (std.mem.eql(u8, value, "fsrpc.e_fs_inval_dir")) return .fs_evt_inval_dir;
+    if (std.mem.eql(u8, value, "fsrpc.err_fs")) return .fs_err;
     if (std.mem.eql(u8, value, "fsrpc.error")) return .err;
     return .unknown;
 }
 
 pub fn controlTypeName(value: ControlType) []const u8 {
     return switch (value) {
+        .version => "control.version",
+        .version_ack => "control.version_ack",
         .connect => "control.connect",
         .connect_ack => "control.connect_ack",
         .session_attach => "control.session_attach",
@@ -129,6 +277,28 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .debug_unsubscribe => "control.debug_unsubscribe",
         .ping => "control.ping",
         .pong => "control.pong",
+        .metrics => "control.metrics",
+        .node_invite_create => "control.node_invite_create",
+        .node_join => "control.node_join",
+        .node_lease_refresh => "control.node_lease_refresh",
+        .node_list => "control.node_list",
+        .node_get => "control.node_get",
+        .node_delete => "control.node_delete",
+        .project_create => "control.project_create",
+        .project_update => "control.project_update",
+        .project_delete => "control.project_delete",
+        .project_list => "control.project_list",
+        .project_get => "control.project_get",
+        .project_mount_set => "control.project_mount_set",
+        .project_mount_remove => "control.project_mount_remove",
+        .project_mount_list => "control.project_mount_list",
+        .project_token_rotate => "control.project_token_rotate",
+        .project_token_revoke => "control.project_token_revoke",
+        .project_activate => "control.project_activate",
+        .workspace_status => "control.workspace_status",
+        .reconcile_status => "control.reconcile_status",
+        .project_up => "control.project_up",
+        .audit_tail => "control.audit_tail",
         .err => "control.error",
         .unknown => "control.unknown",
     };
@@ -154,7 +324,78 @@ pub fn fsrpcTypeName(value: FsrpcType) []const u8 {
         .r_clunk => "fsrpc.r_clunk",
         .t_flush => "fsrpc.t_flush",
         .r_flush => "fsrpc.r_flush",
+        .fs_t_hello => "fsrpc.t_fs_hello",
+        .fs_r_hello => "fsrpc.r_fs_hello",
+        .fs_t_exports => "fsrpc.t_fs_exports",
+        .fs_r_exports => "fsrpc.r_fs_exports",
+        .fs_t_lookup => "fsrpc.t_fs_lookup",
+        .fs_r_lookup => "fsrpc.r_fs_lookup",
+        .fs_t_getattr => "fsrpc.t_fs_getattr",
+        .fs_r_getattr => "fsrpc.r_fs_getattr",
+        .fs_t_readdirp => "fsrpc.t_fs_readdirp",
+        .fs_r_readdirp => "fsrpc.r_fs_readdirp",
+        .fs_t_symlink => "fsrpc.t_fs_symlink",
+        .fs_r_symlink => "fsrpc.r_fs_symlink",
+        .fs_t_setxattr => "fsrpc.t_fs_setxattr",
+        .fs_r_setxattr => "fsrpc.r_fs_setxattr",
+        .fs_t_getxattr => "fsrpc.t_fs_getxattr",
+        .fs_r_getxattr => "fsrpc.r_fs_getxattr",
+        .fs_t_listxattr => "fsrpc.t_fs_listxattr",
+        .fs_r_listxattr => "fsrpc.r_fs_listxattr",
+        .fs_t_removexattr => "fsrpc.t_fs_removexattr",
+        .fs_r_removexattr => "fsrpc.r_fs_removexattr",
+        .fs_t_open => "fsrpc.t_fs_open",
+        .fs_r_open => "fsrpc.r_fs_open",
+        .fs_t_read => "fsrpc.t_fs_read",
+        .fs_r_read => "fsrpc.r_fs_read",
+        .fs_t_close => "fsrpc.t_fs_close",
+        .fs_r_close => "fsrpc.r_fs_close",
+        .fs_t_lock => "fsrpc.t_fs_lock",
+        .fs_r_lock => "fsrpc.r_fs_lock",
+        .fs_t_create => "fsrpc.t_fs_create",
+        .fs_r_create => "fsrpc.r_fs_create",
+        .fs_t_write => "fsrpc.t_fs_write",
+        .fs_r_write => "fsrpc.r_fs_write",
+        .fs_t_truncate => "fsrpc.t_fs_truncate",
+        .fs_r_truncate => "fsrpc.r_fs_truncate",
+        .fs_t_unlink => "fsrpc.t_fs_unlink",
+        .fs_r_unlink => "fsrpc.r_fs_unlink",
+        .fs_t_mkdir => "fsrpc.t_fs_mkdir",
+        .fs_r_mkdir => "fsrpc.r_fs_mkdir",
+        .fs_t_rmdir => "fsrpc.t_fs_rmdir",
+        .fs_r_rmdir => "fsrpc.r_fs_rmdir",
+        .fs_t_rename => "fsrpc.t_fs_rename",
+        .fs_r_rename => "fsrpc.r_fs_rename",
+        .fs_t_statfs => "fsrpc.t_fs_statfs",
+        .fs_r_statfs => "fsrpc.r_fs_statfs",
+        .fs_evt_inval => "fsrpc.e_fs_inval",
+        .fs_evt_inval_dir => "fsrpc.e_fs_inval_dir",
+        .fs_err => "fsrpc.err_fs",
         .err => "fsrpc.error",
         .unknown => "fsrpc.unknown",
     };
+}
+
+test "unified_types: v2 control names round-trip as canonical strings" {
+    try std.testing.expectEqual(ControlType.version, controlTypeFromString(controlTypeName(.version)));
+    try std.testing.expectEqual(ControlType.connect, controlTypeFromString(controlTypeName(.connect)));
+    try std.testing.expectEqual(ControlType.project_mount_set, controlTypeFromString(controlTypeName(.project_mount_set)));
+    try std.testing.expectEqual(ControlType.workspace_status, controlTypeFromString(controlTypeName(.workspace_status)));
+    try std.testing.expectEqual(ControlType.reconcile_status, controlTypeFromString(controlTypeName(.reconcile_status)));
+    try std.testing.expectEqual(ControlType.project_up, controlTypeFromString(controlTypeName(.project_up)));
+    try std.testing.expectEqual(ControlType.audit_tail, controlTypeFromString(controlTypeName(.audit_tail)));
+    try std.testing.expectEqual(ControlType.err, controlTypeFromString(controlTypeName(.err)));
+}
+
+test "unified_types: v2 fsrpc names round-trip as canonical strings" {
+    try std.testing.expectEqual(FsrpcType.t_version, fsrpcTypeFromString(fsrpcTypeName(.t_version)));
+    try std.testing.expectEqual(FsrpcType.fs_t_hello, fsrpcTypeFromString(fsrpcTypeName(.fs_t_hello)));
+    try std.testing.expectEqual(FsrpcType.fs_t_readdirp, fsrpcTypeFromString(fsrpcTypeName(.fs_t_readdirp)));
+    try std.testing.expectEqual(FsrpcType.fs_evt_inval, fsrpcTypeFromString(fsrpcTypeName(.fs_evt_inval)));
+    try std.testing.expectEqual(FsrpcType.err, fsrpcTypeFromString(fsrpcTypeName(.err)));
+}
+
+test "unified_types: legacy message names are not recognized" {
+    try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("session.send"));
+    try std.testing.expectEqual(FsrpcType.unknown, fsrpcTypeFromString("fsrpc.t_hello"));
 }
