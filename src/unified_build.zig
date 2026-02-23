@@ -60,7 +60,14 @@ pub fn buildFsrpcResponse(
     tag: ?u32,
     payload_json: ?[]const u8,
 ) ![]u8 {
-    if (msg_type == .unknown or msg_type == .err or msg_type == .fs_err) return error.InvalidMessageType;
+    if (msg_type == .unknown or
+        msg_type == .err or
+        msg_type == .fs_err or
+        msg_type == .fs_evt_inval or
+        msg_type == .fs_evt_inval_dir)
+    {
+        return error.InvalidMessageType;
+    }
     const payload = payload_json orelse "{}";
     if (tag) |value| {
         return std.fmt.allocPrint(
@@ -199,4 +206,16 @@ test "unified_build: builds distributed fsrpc event envelope" {
 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"fsrpc.e_fs_inval\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"payload\":{\"node\":42") != null);
+}
+
+test "unified_build: rejects fsrpc event types in response builder" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.InvalidMessageType,
+        buildFsrpcResponse(allocator, .fs_evt_inval, 1, "{}"),
+    );
+    try std.testing.expectError(
+        error.InvalidMessageType,
+        buildFsrpcResponse(allocator, .fs_evt_inval_dir, 2, "{}"),
+    );
 }
