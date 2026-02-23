@@ -35,6 +35,10 @@ pub fn parseMessage(allocator: std.mem.Allocator, raw_json: []const u8) !types.P
         if (raw != .string) return types.ParseError.InvalidType;
         out.correlation_id = try allocator.dupe(u8, raw.string);
     }
+    if (obj.get("session_key")) |raw| {
+        if (raw != .string) return types.ParseError.InvalidType;
+        out.session_key = try allocator.dupe(u8, raw.string);
+    }
 
     switch (channel) {
         .control => {
