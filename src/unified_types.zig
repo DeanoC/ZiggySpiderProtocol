@@ -20,11 +20,15 @@ pub const ControlType = enum {
     connect_ack,
     session_attach,
     session_resume,
+    session_list,
+    session_close,
     debug_subscribe,
     debug_unsubscribe,
     ping,
     pong,
     metrics,
+    auth_status,
+    auth_rotate,
     node_invite_create,
     node_join,
     node_lease_refresh,
@@ -127,6 +131,7 @@ pub const ParsedMessage = struct {
 
     id: ?[]u8 = null,
     correlation_id: ?[]u8 = null,
+    session_key: ?[]u8 = null,
     tag: ?u32 = null,
     node: ?u64 = null,
     handle: ?u64 = null,
@@ -148,6 +153,7 @@ pub const ParsedMessage = struct {
     pub fn deinit(self: *ParsedMessage, allocator: std.mem.Allocator) void {
         if (self.id) |value| allocator.free(value);
         if (self.correlation_id) |value| allocator.free(value);
+        if (self.session_key) |value| allocator.free(value);
         if (self.mode) |value| allocator.free(value);
         if (self.version) |value| allocator.free(value);
         if (self.data) |value| allocator.free(value);
@@ -165,11 +171,15 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.connect_ack")) return .connect_ack;
     if (std.mem.eql(u8, value, "control.session_attach")) return .session_attach;
     if (std.mem.eql(u8, value, "control.session_resume")) return .session_resume;
+    if (std.mem.eql(u8, value, "control.session_list")) return .session_list;
+    if (std.mem.eql(u8, value, "control.session_close")) return .session_close;
     if (std.mem.eql(u8, value, "control.debug_subscribe")) return .debug_subscribe;
     if (std.mem.eql(u8, value, "control.debug_unsubscribe")) return .debug_unsubscribe;
     if (std.mem.eql(u8, value, "control.ping")) return .ping;
     if (std.mem.eql(u8, value, "control.pong")) return .pong;
     if (std.mem.eql(u8, value, "control.metrics")) return .metrics;
+    if (std.mem.eql(u8, value, "control.auth_status")) return .auth_status;
+    if (std.mem.eql(u8, value, "control.auth_rotate")) return .auth_rotate;
     if (std.mem.eql(u8, value, "control.node_invite_create")) return .node_invite_create;
     if (std.mem.eql(u8, value, "control.node_join")) return .node_join;
     if (std.mem.eql(u8, value, "control.node_lease_refresh")) return .node_lease_refresh;
@@ -273,11 +283,15 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .connect_ack => "control.connect_ack",
         .session_attach => "control.session_attach",
         .session_resume => "control.session_resume",
+        .session_list => "control.session_list",
+        .session_close => "control.session_close",
         .debug_subscribe => "control.debug_subscribe",
         .debug_unsubscribe => "control.debug_unsubscribe",
         .ping => "control.ping",
         .pong => "control.pong",
         .metrics => "control.metrics",
+        .auth_status => "control.auth_status",
+        .auth_rotate => "control.auth_rotate",
         .node_invite_create => "control.node_invite_create",
         .node_join => "control.node_join",
         .node_lease_refresh => "control.node_lease_refresh",
