@@ -60,7 +60,14 @@ pub fn buildFsrpcResponse(
     tag: ?u32,
     payload_json: ?[]const u8,
 ) ![]u8 {
-    if (msg_type == .unknown or msg_type == .err) return error.InvalidMessageType;
+    if (msg_type == .unknown or
+        msg_type == .err or
+        msg_type == .fs_err or
+        msg_type == .fs_evt_inval or
+        msg_type == .fs_evt_inval_dir)
+    {
+        return error.InvalidMessageType;
+    }
     const payload = payload_json orelse "{}";
     if (tag) |value| {
         return std.fmt.allocPrint(
@@ -103,6 +110,44 @@ pub fn buildFsrpcError(
     );
 }
 
+pub fn buildFsrpcFsError(
+    allocator: std.mem.Allocator,
+    tag: ?u32,
+    errno: i32,
+    message: []const u8,
+) ![]u8 {
+    const escaped_message = try jsonEscape(allocator, message);
+    defer allocator.free(escaped_message);
+
+    if (tag) |value| {
+        return std.fmt.allocPrint(
+            allocator,
+            "{{\"channel\":\"fsrpc\",\"type\":\"fsrpc.err_fs\",\"tag\":{d},\"ok\":false,\"error\":{{\"errno\":{d},\"message\":\"{s}\"}}}}",
+            .{ value, errno, escaped_message },
+        );
+    }
+
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"channel\":\"fsrpc\",\"type\":\"fsrpc.err_fs\",\"ok\":false,\"error\":{{\"errno\":{d},\"message\":\"{s}\"}}}}",
+        .{ errno, escaped_message },
+    );
+}
+
+pub fn buildFsrpcEvent(
+    allocator: std.mem.Allocator,
+    msg_type: types.FsrpcType,
+    payload_json: ?[]const u8,
+) ![]u8 {
+    if (msg_type != .fs_evt_inval and msg_type != .fs_evt_inval_dir) return error.InvalidMessageType;
+    const payload = payload_json orelse "{}";
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"channel\":\"fsrpc\",\"type\":\"{s}\",\"payload\":{s}}}",
+        .{ types.fsrpcTypeName(msg_type), payload },
+    );
+}
+
 pub fn encodeDataB64(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     const encoder = std.base64.standard.Encoder;
     const encoded_len = encoder.calcSize(data.len);
@@ -142,4 +187,35 @@ test "unified_build: builds fsrpc error with tag" {
 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"channel\":\"fsrpc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"tag\":7") != null);
+}
+
+test "unified_build: builds distributed fsrpc error with errno" {
+    const allocator = std.testing.allocator;
+    const payload = try buildFsrpcFsError(allocator, 3, 2, "not found");
+    defer allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"fsrpc.err_fs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"errno\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"tag\":3") != null);
+}
+
+test "unified_build: builds distributed fsrpc event envelope" {
+    const allocator = std.testing.allocator;
+    const payload = try buildFsrpcEvent(allocator, .fs_evt_inval, "{\"node\":42,\"what\":\"all\"}");
+    defer allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"fsrpc.e_fs_inval\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"payload\":{\"node\":42") != null);
+}
+
+test "unified_build: rejects fsrpc event types in response builder" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.InvalidMessageType,
+        buildFsrpcResponse(allocator, .fs_evt_inval, 1, "{}"),
+    );
+    try std.testing.expectError(
+        error.InvalidMessageType,
+        buildFsrpcResponse(allocator, .fs_evt_inval_dir, 2, "{}"),
+    );
 }

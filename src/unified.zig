@@ -20,6 +20,8 @@ pub const buildControlAck = build.buildControlAck;
 pub const buildControlError = build.buildControlError;
 pub const buildFsrpcResponse = build.buildFsrpcResponse;
 pub const buildFsrpcError = build.buildFsrpcError;
+pub const buildFsrpcFsError = build.buildFsrpcFsError;
+pub const buildFsrpcEvent = build.buildFsrpcEvent;
 pub const encodeDataB64 = build.encodeDataB64;
 pub const jsonEscape = build.jsonEscape;
 
