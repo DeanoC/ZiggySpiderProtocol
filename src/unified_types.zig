@@ -19,6 +19,7 @@ pub const ControlType = enum {
     connect,
     connect_ack,
     session_attach,
+    session_status,
     session_resume,
     session_list,
     session_close,
@@ -170,6 +171,7 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.connect")) return .connect;
     if (std.mem.eql(u8, value, "control.connect_ack")) return .connect_ack;
     if (std.mem.eql(u8, value, "control.session_attach")) return .session_attach;
+    if (std.mem.eql(u8, value, "control.session_status")) return .session_status;
     if (std.mem.eql(u8, value, "control.session_resume")) return .session_resume;
     if (std.mem.eql(u8, value, "control.session_list")) return .session_list;
     if (std.mem.eql(u8, value, "control.session_close")) return .session_close;
@@ -282,6 +284,7 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .connect => "control.connect",
         .connect_ack => "control.connect_ack",
         .session_attach => "control.session_attach",
+        .session_status => "control.session_status",
         .session_resume => "control.session_resume",
         .session_list => "control.session_list",
         .session_close => "control.session_close",
@@ -393,6 +396,8 @@ pub fn fsrpcTypeName(value: FsrpcType) []const u8 {
 test "unified_types: v2 control names round-trip as canonical strings" {
     try std.testing.expectEqual(ControlType.version, controlTypeFromString(controlTypeName(.version)));
     try std.testing.expectEqual(ControlType.connect, controlTypeFromString(controlTypeName(.connect)));
+    try std.testing.expectEqual(ControlType.session_attach, controlTypeFromString(controlTypeName(.session_attach)));
+    try std.testing.expectEqual(ControlType.session_status, controlTypeFromString(controlTypeName(.session_status)));
     try std.testing.expectEqual(ControlType.project_mount_set, controlTypeFromString(controlTypeName(.project_mount_set)));
     try std.testing.expectEqual(ControlType.workspace_status, controlTypeFromString(controlTypeName(.workspace_status)));
     try std.testing.expectEqual(ControlType.reconcile_status, controlTypeFromString(controlTypeName(.reconcile_status)));
