@@ -72,15 +72,15 @@ pub fn buildFsrpcResponse(
     if (tag) |value| {
         return std.fmt.allocPrint(
             allocator,
-            "{{\"channel\":\"fsrpc\",\"type\":\"{s}\",\"tag\":{d},\"ok\":true,\"payload\":{s}}}",
-            .{ types.fsrpcTypeName(msg_type), value, payload },
+            "{{\"channel\":\"acheron\",\"type\":\"{s}\",\"tag\":{d},\"ok\":true,\"payload\":{s}}}",
+            .{ types.acheronTypeName(msg_type), value, payload },
         );
     }
 
     return std.fmt.allocPrint(
         allocator,
-        "{{\"channel\":\"fsrpc\",\"type\":\"{s}\",\"ok\":true,\"payload\":{s}}}",
-        .{ types.fsrpcTypeName(msg_type), payload },
+        "{{\"channel\":\"acheron\",\"type\":\"{s}\",\"ok\":true,\"payload\":{s}}}",
+        .{ types.acheronTypeName(msg_type), payload },
     );
 }
 
@@ -98,14 +98,14 @@ pub fn buildFsrpcError(
     if (tag) |value| {
         return std.fmt.allocPrint(
             allocator,
-            "{{\"channel\":\"fsrpc\",\"type\":\"fsrpc.error\",\"tag\":{d},\"ok\":false,\"error\":{{\"code\":\"{s}\",\"message\":\"{s}\"}}}}",
+            "{{\"channel\":\"acheron\",\"type\":\"acheron.error\",\"tag\":{d},\"ok\":false,\"error\":{{\"code\":\"{s}\",\"message\":\"{s}\"}}}}",
             .{ value, escaped_code, escaped_message },
         );
     }
 
     return std.fmt.allocPrint(
         allocator,
-        "{{\"channel\":\"fsrpc\",\"type\":\"fsrpc.error\",\"ok\":false,\"error\":{{\"code\":\"{s}\",\"message\":\"{s}\"}}}}",
+        "{{\"channel\":\"acheron\",\"type\":\"acheron.error\",\"ok\":false,\"error\":{{\"code\":\"{s}\",\"message\":\"{s}\"}}}}",
         .{ escaped_code, escaped_message },
     );
 }
@@ -122,14 +122,14 @@ pub fn buildFsrpcFsError(
     if (tag) |value| {
         return std.fmt.allocPrint(
             allocator,
-            "{{\"channel\":\"fsrpc\",\"type\":\"fsrpc.err_fs\",\"tag\":{d},\"ok\":false,\"error\":{{\"errno\":{d},\"message\":\"{s}\"}}}}",
+            "{{\"channel\":\"acheron\",\"type\":\"acheron.err_fs\",\"tag\":{d},\"ok\":false,\"error\":{{\"errno\":{d},\"message\":\"{s}\"}}}}",
             .{ value, errno, escaped_message },
         );
     }
 
     return std.fmt.allocPrint(
         allocator,
-        "{{\"channel\":\"fsrpc\",\"type\":\"fsrpc.err_fs\",\"ok\":false,\"error\":{{\"errno\":{d},\"message\":\"{s}\"}}}}",
+        "{{\"channel\":\"acheron\",\"type\":\"acheron.err_fs\",\"ok\":false,\"error\":{{\"errno\":{d},\"message\":\"{s}\"}}}}",
         .{ errno, escaped_message },
     );
 }
@@ -143,8 +143,8 @@ pub fn buildFsrpcEvent(
     const payload = payload_json orelse "{}";
     return std.fmt.allocPrint(
         allocator,
-        "{{\"channel\":\"fsrpc\",\"type\":\"{s}\",\"payload\":{s}}}",
-        .{ types.fsrpcTypeName(msg_type), payload },
+        "{{\"channel\":\"acheron\",\"type\":\"{s}\",\"payload\":{s}}}",
+        .{ types.acheronTypeName(msg_type), payload },
     );
 }
 
@@ -185,7 +185,7 @@ test "unified_build: builds fsrpc error with tag" {
     const payload = try buildFsrpcError(allocator, 7, "enoent", "not found");
     defer allocator.free(payload);
 
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"channel\":\"fsrpc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"channel\":\"acheron\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"tag\":7") != null);
 }
 
@@ -194,7 +194,7 @@ test "unified_build: builds distributed fsrpc error with errno" {
     const payload = try buildFsrpcFsError(allocator, 3, 2, "not found");
     defer allocator.free(payload);
 
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"fsrpc.err_fs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"acheron.err_fs\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"errno\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"tag\":3") != null);
 }
@@ -204,7 +204,7 @@ test "unified_build: builds distributed fsrpc event envelope" {
     const payload = try buildFsrpcEvent(allocator, .fs_evt_inval, "{\"node\":42,\"what\":\"all\"}");
     defer allocator.free(payload);
 
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"fsrpc.e_fs_inval\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"acheron.e_fs_inval\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"payload\":{\"node\":42") != null);
 }
 

@@ -10,7 +10,7 @@ pub const ParseError = error{
 
 pub const Channel = enum {
     control,
-    fsrpc,
+    acheron,
 };
 
 pub const ControlType = enum {
@@ -128,7 +128,7 @@ pub const FsrpcType = enum {
 pub const ParsedMessage = struct {
     channel: Channel,
     control_type: ?ControlType = null,
-    fsrpc_type: ?FsrpcType = null,
+    acheron_type: ?FsrpcType = null,
 
     id: ?[]u8 = null,
     correlation_id: ?[]u8 = null,
@@ -208,73 +208,79 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
 }
 
 pub fn fsrpcTypeFromString(value: []const u8) FsrpcType {
-    if (std.mem.eql(u8, value, "fsrpc.t_version")) return .t_version;
-    if (std.mem.eql(u8, value, "fsrpc.r_version")) return .r_version;
-    if (std.mem.eql(u8, value, "fsrpc.t_attach")) return .t_attach;
-    if (std.mem.eql(u8, value, "fsrpc.r_attach")) return .r_attach;
-    if (std.mem.eql(u8, value, "fsrpc.t_walk")) return .t_walk;
-    if (std.mem.eql(u8, value, "fsrpc.r_walk")) return .r_walk;
-    if (std.mem.eql(u8, value, "fsrpc.t_open")) return .t_open;
-    if (std.mem.eql(u8, value, "fsrpc.r_open")) return .r_open;
-    if (std.mem.eql(u8, value, "fsrpc.t_read")) return .t_read;
-    if (std.mem.eql(u8, value, "fsrpc.r_read")) return .r_read;
-    if (std.mem.eql(u8, value, "fsrpc.t_write")) return .t_write;
-    if (std.mem.eql(u8, value, "fsrpc.r_write")) return .r_write;
-    if (std.mem.eql(u8, value, "fsrpc.t_stat")) return .t_stat;
-    if (std.mem.eql(u8, value, "fsrpc.r_stat")) return .r_stat;
-    if (std.mem.eql(u8, value, "fsrpc.t_clunk")) return .t_clunk;
-    if (std.mem.eql(u8, value, "fsrpc.r_clunk")) return .r_clunk;
-    if (std.mem.eql(u8, value, "fsrpc.t_flush")) return .t_flush;
-    if (std.mem.eql(u8, value, "fsrpc.r_flush")) return .r_flush;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_hello")) return .fs_t_hello;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_hello")) return .fs_r_hello;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_exports")) return .fs_t_exports;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_exports")) return .fs_r_exports;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_lookup")) return .fs_t_lookup;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_lookup")) return .fs_r_lookup;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_getattr")) return .fs_t_getattr;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_getattr")) return .fs_r_getattr;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_readdirp")) return .fs_t_readdirp;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_readdirp")) return .fs_r_readdirp;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_symlink")) return .fs_t_symlink;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_symlink")) return .fs_r_symlink;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_setxattr")) return .fs_t_setxattr;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_setxattr")) return .fs_r_setxattr;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_getxattr")) return .fs_t_getxattr;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_getxattr")) return .fs_r_getxattr;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_listxattr")) return .fs_t_listxattr;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_listxattr")) return .fs_r_listxattr;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_removexattr")) return .fs_t_removexattr;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_removexattr")) return .fs_r_removexattr;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_open")) return .fs_t_open;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_open")) return .fs_r_open;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_read")) return .fs_t_read;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_read")) return .fs_r_read;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_close")) return .fs_t_close;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_close")) return .fs_r_close;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_lock")) return .fs_t_lock;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_lock")) return .fs_r_lock;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_create")) return .fs_t_create;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_create")) return .fs_r_create;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_write")) return .fs_t_write;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_write")) return .fs_r_write;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_truncate")) return .fs_t_truncate;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_truncate")) return .fs_r_truncate;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_unlink")) return .fs_t_unlink;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_unlink")) return .fs_r_unlink;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_mkdir")) return .fs_t_mkdir;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_mkdir")) return .fs_r_mkdir;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_rmdir")) return .fs_t_rmdir;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_rmdir")) return .fs_r_rmdir;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_rename")) return .fs_t_rename;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_rename")) return .fs_r_rename;
-    if (std.mem.eql(u8, value, "fsrpc.t_fs_statfs")) return .fs_t_statfs;
-    if (std.mem.eql(u8, value, "fsrpc.r_fs_statfs")) return .fs_r_statfs;
-    if (std.mem.eql(u8, value, "fsrpc.e_fs_inval")) return .fs_evt_inval;
-    if (std.mem.eql(u8, value, "fsrpc.e_fs_inval_dir")) return .fs_evt_inval_dir;
-    if (std.mem.eql(u8, value, "fsrpc.err_fs")) return .fs_err;
-    if (std.mem.eql(u8, value, "fsrpc.error")) return .err;
+    if (std.mem.eql(u8, value, "acheron.t_version")) return .t_version;
+    if (std.mem.eql(u8, value, "acheron.r_version")) return .r_version;
+    if (std.mem.eql(u8, value, "acheron.t_attach")) return .t_attach;
+    if (std.mem.eql(u8, value, "acheron.r_attach")) return .r_attach;
+    if (std.mem.eql(u8, value, "acheron.t_walk")) return .t_walk;
+    if (std.mem.eql(u8, value, "acheron.r_walk")) return .r_walk;
+    if (std.mem.eql(u8, value, "acheron.t_open")) return .t_open;
+    if (std.mem.eql(u8, value, "acheron.r_open")) return .r_open;
+    if (std.mem.eql(u8, value, "acheron.t_read")) return .t_read;
+    if (std.mem.eql(u8, value, "acheron.r_read")) return .r_read;
+    if (std.mem.eql(u8, value, "acheron.t_write")) return .t_write;
+    if (std.mem.eql(u8, value, "acheron.r_write")) return .r_write;
+    if (std.mem.eql(u8, value, "acheron.t_stat")) return .t_stat;
+    if (std.mem.eql(u8, value, "acheron.r_stat")) return .r_stat;
+    if (std.mem.eql(u8, value, "acheron.t_clunk")) return .t_clunk;
+    if (std.mem.eql(u8, value, "acheron.r_clunk")) return .r_clunk;
+    if (std.mem.eql(u8, value, "acheron.t_flush")) return .t_flush;
+    if (std.mem.eql(u8, value, "acheron.r_flush")) return .r_flush;
+    if (std.mem.eql(u8, value, "acheron.t_fs_hello")) return .fs_t_hello;
+    if (std.mem.eql(u8, value, "acheron.r_fs_hello")) return .fs_r_hello;
+    if (std.mem.eql(u8, value, "acheron.t_fs_exports")) return .fs_t_exports;
+    if (std.mem.eql(u8, value, "acheron.r_fs_exports")) return .fs_r_exports;
+    if (std.mem.eql(u8, value, "acheron.t_fs_lookup")) return .fs_t_lookup;
+    if (std.mem.eql(u8, value, "acheron.r_fs_lookup")) return .fs_r_lookup;
+    if (std.mem.eql(u8, value, "acheron.t_fs_getattr")) return .fs_t_getattr;
+    if (std.mem.eql(u8, value, "acheron.r_fs_getattr")) return .fs_r_getattr;
+    if (std.mem.eql(u8, value, "acheron.t_fs_readdirp")) return .fs_t_readdirp;
+    if (std.mem.eql(u8, value, "acheron.r_fs_readdirp")) return .fs_r_readdirp;
+    if (std.mem.eql(u8, value, "acheron.t_fs_symlink")) return .fs_t_symlink;
+    if (std.mem.eql(u8, value, "acheron.r_fs_symlink")) return .fs_r_symlink;
+    if (std.mem.eql(u8, value, "acheron.t_fs_setxattr")) return .fs_t_setxattr;
+    if (std.mem.eql(u8, value, "acheron.r_fs_setxattr")) return .fs_r_setxattr;
+    if (std.mem.eql(u8, value, "acheron.t_fs_getxattr")) return .fs_t_getxattr;
+    if (std.mem.eql(u8, value, "acheron.r_fs_getxattr")) return .fs_r_getxattr;
+    if (std.mem.eql(u8, value, "acheron.t_fs_listxattr")) return .fs_t_listxattr;
+    if (std.mem.eql(u8, value, "acheron.r_fs_listxattr")) return .fs_r_listxattr;
+    if (std.mem.eql(u8, value, "acheron.t_fs_removexattr")) return .fs_t_removexattr;
+    if (std.mem.eql(u8, value, "acheron.r_fs_removexattr")) return .fs_r_removexattr;
+    if (std.mem.eql(u8, value, "acheron.t_fs_open")) return .fs_t_open;
+    if (std.mem.eql(u8, value, "acheron.r_fs_open")) return .fs_r_open;
+    if (std.mem.eql(u8, value, "acheron.t_fs_read")) return .fs_t_read;
+    if (std.mem.eql(u8, value, "acheron.r_fs_read")) return .fs_r_read;
+    if (std.mem.eql(u8, value, "acheron.t_fs_close")) return .fs_t_close;
+    if (std.mem.eql(u8, value, "acheron.r_fs_close")) return .fs_r_close;
+    if (std.mem.eql(u8, value, "acheron.t_fs_lock")) return .fs_t_lock;
+    if (std.mem.eql(u8, value, "acheron.r_fs_lock")) return .fs_r_lock;
+    if (std.mem.eql(u8, value, "acheron.t_fs_create")) return .fs_t_create;
+    if (std.mem.eql(u8, value, "acheron.r_fs_create")) return .fs_r_create;
+    if (std.mem.eql(u8, value, "acheron.t_fs_write")) return .fs_t_write;
+    if (std.mem.eql(u8, value, "acheron.r_fs_write")) return .fs_r_write;
+    if (std.mem.eql(u8, value, "acheron.t_fs_truncate")) return .fs_t_truncate;
+    if (std.mem.eql(u8, value, "acheron.r_fs_truncate")) return .fs_r_truncate;
+    if (std.mem.eql(u8, value, "acheron.t_fs_unlink")) return .fs_t_unlink;
+    if (std.mem.eql(u8, value, "acheron.r_fs_unlink")) return .fs_r_unlink;
+    if (std.mem.eql(u8, value, "acheron.t_fs_mkdir")) return .fs_t_mkdir;
+    if (std.mem.eql(u8, value, "acheron.r_fs_mkdir")) return .fs_r_mkdir;
+    if (std.mem.eql(u8, value, "acheron.t_fs_rmdir")) return .fs_t_rmdir;
+    if (std.mem.eql(u8, value, "acheron.r_fs_rmdir")) return .fs_r_rmdir;
+    if (std.mem.eql(u8, value, "acheron.t_fs_rename")) return .fs_t_rename;
+    if (std.mem.eql(u8, value, "acheron.r_fs_rename")) return .fs_r_rename;
+    if (std.mem.eql(u8, value, "acheron.t_fs_statfs")) return .fs_t_statfs;
+    if (std.mem.eql(u8, value, "acheron.r_fs_statfs")) return .fs_r_statfs;
+    if (std.mem.eql(u8, value, "acheron.e_fs_inval")) return .fs_evt_inval;
+    if (std.mem.eql(u8, value, "acheron.e_fs_inval_dir")) return .fs_evt_inval_dir;
+    if (std.mem.eql(u8, value, "acheron.err_fs")) return .fs_err;
+    if (std.mem.eql(u8, value, "acheron.error")) return .err;
     return .unknown;
+}
+
+pub const AcheronType = FsrpcType;
+
+pub fn acheronTypeFromString(value: []const u8) FsrpcType {
+    return fsrpcTypeFromString(value);
 }
 
 pub fn controlTypeName(value: ControlType) []const u8 {
@@ -323,74 +329,78 @@ pub fn controlTypeName(value: ControlType) []const u8 {
 
 pub fn fsrpcTypeName(value: FsrpcType) []const u8 {
     return switch (value) {
-        .t_version => "fsrpc.t_version",
-        .r_version => "fsrpc.r_version",
-        .t_attach => "fsrpc.t_attach",
-        .r_attach => "fsrpc.r_attach",
-        .t_walk => "fsrpc.t_walk",
-        .r_walk => "fsrpc.r_walk",
-        .t_open => "fsrpc.t_open",
-        .r_open => "fsrpc.r_open",
-        .t_read => "fsrpc.t_read",
-        .r_read => "fsrpc.r_read",
-        .t_write => "fsrpc.t_write",
-        .r_write => "fsrpc.r_write",
-        .t_stat => "fsrpc.t_stat",
-        .r_stat => "fsrpc.r_stat",
-        .t_clunk => "fsrpc.t_clunk",
-        .r_clunk => "fsrpc.r_clunk",
-        .t_flush => "fsrpc.t_flush",
-        .r_flush => "fsrpc.r_flush",
-        .fs_t_hello => "fsrpc.t_fs_hello",
-        .fs_r_hello => "fsrpc.r_fs_hello",
-        .fs_t_exports => "fsrpc.t_fs_exports",
-        .fs_r_exports => "fsrpc.r_fs_exports",
-        .fs_t_lookup => "fsrpc.t_fs_lookup",
-        .fs_r_lookup => "fsrpc.r_fs_lookup",
-        .fs_t_getattr => "fsrpc.t_fs_getattr",
-        .fs_r_getattr => "fsrpc.r_fs_getattr",
-        .fs_t_readdirp => "fsrpc.t_fs_readdirp",
-        .fs_r_readdirp => "fsrpc.r_fs_readdirp",
-        .fs_t_symlink => "fsrpc.t_fs_symlink",
-        .fs_r_symlink => "fsrpc.r_fs_symlink",
-        .fs_t_setxattr => "fsrpc.t_fs_setxattr",
-        .fs_r_setxattr => "fsrpc.r_fs_setxattr",
-        .fs_t_getxattr => "fsrpc.t_fs_getxattr",
-        .fs_r_getxattr => "fsrpc.r_fs_getxattr",
-        .fs_t_listxattr => "fsrpc.t_fs_listxattr",
-        .fs_r_listxattr => "fsrpc.r_fs_listxattr",
-        .fs_t_removexattr => "fsrpc.t_fs_removexattr",
-        .fs_r_removexattr => "fsrpc.r_fs_removexattr",
-        .fs_t_open => "fsrpc.t_fs_open",
-        .fs_r_open => "fsrpc.r_fs_open",
-        .fs_t_read => "fsrpc.t_fs_read",
-        .fs_r_read => "fsrpc.r_fs_read",
-        .fs_t_close => "fsrpc.t_fs_close",
-        .fs_r_close => "fsrpc.r_fs_close",
-        .fs_t_lock => "fsrpc.t_fs_lock",
-        .fs_r_lock => "fsrpc.r_fs_lock",
-        .fs_t_create => "fsrpc.t_fs_create",
-        .fs_r_create => "fsrpc.r_fs_create",
-        .fs_t_write => "fsrpc.t_fs_write",
-        .fs_r_write => "fsrpc.r_fs_write",
-        .fs_t_truncate => "fsrpc.t_fs_truncate",
-        .fs_r_truncate => "fsrpc.r_fs_truncate",
-        .fs_t_unlink => "fsrpc.t_fs_unlink",
-        .fs_r_unlink => "fsrpc.r_fs_unlink",
-        .fs_t_mkdir => "fsrpc.t_fs_mkdir",
-        .fs_r_mkdir => "fsrpc.r_fs_mkdir",
-        .fs_t_rmdir => "fsrpc.t_fs_rmdir",
-        .fs_r_rmdir => "fsrpc.r_fs_rmdir",
-        .fs_t_rename => "fsrpc.t_fs_rename",
-        .fs_r_rename => "fsrpc.r_fs_rename",
-        .fs_t_statfs => "fsrpc.t_fs_statfs",
-        .fs_r_statfs => "fsrpc.r_fs_statfs",
-        .fs_evt_inval => "fsrpc.e_fs_inval",
-        .fs_evt_inval_dir => "fsrpc.e_fs_inval_dir",
-        .fs_err => "fsrpc.err_fs",
-        .err => "fsrpc.error",
-        .unknown => "fsrpc.unknown",
+        .t_version => "acheron.t_version",
+        .r_version => "acheron.r_version",
+        .t_attach => "acheron.t_attach",
+        .r_attach => "acheron.r_attach",
+        .t_walk => "acheron.t_walk",
+        .r_walk => "acheron.r_walk",
+        .t_open => "acheron.t_open",
+        .r_open => "acheron.r_open",
+        .t_read => "acheron.t_read",
+        .r_read => "acheron.r_read",
+        .t_write => "acheron.t_write",
+        .r_write => "acheron.r_write",
+        .t_stat => "acheron.t_stat",
+        .r_stat => "acheron.r_stat",
+        .t_clunk => "acheron.t_clunk",
+        .r_clunk => "acheron.r_clunk",
+        .t_flush => "acheron.t_flush",
+        .r_flush => "acheron.r_flush",
+        .fs_t_hello => "acheron.t_fs_hello",
+        .fs_r_hello => "acheron.r_fs_hello",
+        .fs_t_exports => "acheron.t_fs_exports",
+        .fs_r_exports => "acheron.r_fs_exports",
+        .fs_t_lookup => "acheron.t_fs_lookup",
+        .fs_r_lookup => "acheron.r_fs_lookup",
+        .fs_t_getattr => "acheron.t_fs_getattr",
+        .fs_r_getattr => "acheron.r_fs_getattr",
+        .fs_t_readdirp => "acheron.t_fs_readdirp",
+        .fs_r_readdirp => "acheron.r_fs_readdirp",
+        .fs_t_symlink => "acheron.t_fs_symlink",
+        .fs_r_symlink => "acheron.r_fs_symlink",
+        .fs_t_setxattr => "acheron.t_fs_setxattr",
+        .fs_r_setxattr => "acheron.r_fs_setxattr",
+        .fs_t_getxattr => "acheron.t_fs_getxattr",
+        .fs_r_getxattr => "acheron.r_fs_getxattr",
+        .fs_t_listxattr => "acheron.t_fs_listxattr",
+        .fs_r_listxattr => "acheron.r_fs_listxattr",
+        .fs_t_removexattr => "acheron.t_fs_removexattr",
+        .fs_r_removexattr => "acheron.r_fs_removexattr",
+        .fs_t_open => "acheron.t_fs_open",
+        .fs_r_open => "acheron.r_fs_open",
+        .fs_t_read => "acheron.t_fs_read",
+        .fs_r_read => "acheron.r_fs_read",
+        .fs_t_close => "acheron.t_fs_close",
+        .fs_r_close => "acheron.r_fs_close",
+        .fs_t_lock => "acheron.t_fs_lock",
+        .fs_r_lock => "acheron.r_fs_lock",
+        .fs_t_create => "acheron.t_fs_create",
+        .fs_r_create => "acheron.r_fs_create",
+        .fs_t_write => "acheron.t_fs_write",
+        .fs_r_write => "acheron.r_fs_write",
+        .fs_t_truncate => "acheron.t_fs_truncate",
+        .fs_r_truncate => "acheron.r_fs_truncate",
+        .fs_t_unlink => "acheron.t_fs_unlink",
+        .fs_r_unlink => "acheron.r_fs_unlink",
+        .fs_t_mkdir => "acheron.t_fs_mkdir",
+        .fs_r_mkdir => "acheron.r_fs_mkdir",
+        .fs_t_rmdir => "acheron.t_fs_rmdir",
+        .fs_r_rmdir => "acheron.r_fs_rmdir",
+        .fs_t_rename => "acheron.t_fs_rename",
+        .fs_r_rename => "acheron.r_fs_rename",
+        .fs_t_statfs => "acheron.t_fs_statfs",
+        .fs_r_statfs => "acheron.r_fs_statfs",
+        .fs_evt_inval => "acheron.e_fs_inval",
+        .fs_evt_inval_dir => "acheron.e_fs_inval_dir",
+        .fs_err => "acheron.err_fs",
+        .err => "acheron.error",
+        .unknown => "acheron.unknown",
     };
+}
+
+pub fn acheronTypeName(value: FsrpcType) []const u8 {
+    return fsrpcTypeName(value);
 }
 
 test "unified_types: v2 control names round-trip as canonical strings" {
@@ -416,5 +426,5 @@ test "unified_types: v2 fsrpc names round-trip as canonical strings" {
 
 test "unified_types: legacy message names are not recognized" {
     try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("session.send"));
-    try std.testing.expectEqual(FsrpcType.unknown, fsrpcTypeFromString("fsrpc.t_hello"));
+    try std.testing.expectEqual(FsrpcType.unknown, fsrpcTypeFromString("acheron.t_hello"));
 }
