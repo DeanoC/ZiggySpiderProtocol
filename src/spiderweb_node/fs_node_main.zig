@@ -407,129 +407,139 @@ pub fn main() !void {
             .reconnect_backoff_max_ms = reconnect_backoff_max_ms,
         };
 
-        var routed_fs_url: []u8 = undefined;
         while (true) {
-            if (!state.isPaired()) {
-                try pairNodeUntilCredentials(allocator, pairing_opts, &state);
-            }
+            var routed_fs_url: []u8 = undefined;
+            while (true) {
+                if (!state.isPaired()) {
+                    try pairNodeUntilCredentials(allocator, pairing_opts, &state);
+                }
 
-            if (!state.isPaired()) {
-                std.log.err("control pairing did not produce node credentials", .{});
-                return error.PairingFailed;
-            }
+                if (!state.isPaired()) {
+                    std.log.err("control pairing did not produce node credentials", .{});
+                    return error.PairingFailed;
+                }
 
-            if (auth_token_from_pair_state) {
-                auth_token = state.node_secret;
-            } else if (auth_token) |manual_auth| {
-                if (state.node_secret) |secret| {
-                    if (!std.mem.eql(u8, manual_auth, secret)) {
-                        std.log.warn("--auth-token differs from paired node_secret; node_secret should be used for control-routed mounts", .{});
+                if (auth_token_from_pair_state) {
+                    auth_token = state.node_secret;
+                } else if (auth_token) |manual_auth| {
+                    if (state.node_secret) |secret| {
+                        if (!std.mem.eql(u8, manual_auth, secret)) {
+                            std.log.warn("--auth-token differs from paired node_secret; node_secret should be used for control-routed mounts", .{});
+                        }
+                    }
+                } else {
+                    auth_token = state.node_secret;
+                    auth_token_from_pair_state = true;
+                }
+
+                if (auth_token) |token| {
+                    std.log.info("FS node session auth enabled", .{});
+                    if (state.node_secret) |secret| {
+                        if (!std.mem.eql(u8, token, secret)) {
+                            std.log.warn("fs auth token does not match paired node secret", .{});
+                        }
                     }
                 }
-            } else {
-                auth_token = state.node_secret;
-                auth_token_from_pair_state = true;
-            }
 
-            if (auth_token) |token| {
-                std.log.info("FS node session auth enabled", .{});
-                if (state.node_secret) |secret| {
-                    if (!std.mem.eql(u8, token, secret)) {
-                        std.log.warn("fs auth token does not match paired node secret", .{});
-                    }
-                }
-            }
+                upsertNodeServiceCatalog(
+                    allocator,
+                    control_connect,
+                    &service_registry,
+                    &state,
+                ) catch |err| switch (err) {
+                    error.ControlNodeIdentityRejected => {
+                        std.log.warn("paired node identity missing on control plane; clearing local node state and re-pairing", .{});
+                        state.deinit(allocator);
+                        try saveNodePairState(allocator, state_path, &state);
+                        continue;
+                    },
+                    else => std.log.warn("initial node service catalog upsert failed: {s}", .{@errorName(err)}),
+                };
 
-            upsertNodeServiceCatalog(
+                routed_fs_url = try buildControlRoutedFsUrl(
+                    allocator,
+                    control_url_value,
+                    state.node_id.?,
+                );
+
+                refreshNodeLeaseOnce(
+                    allocator,
+                    control_connect,
+                    state_path,
+                    routed_fs_url,
+                    &service_registry,
+                    lease_ttl_ms,
+                ) catch |err| switch (err) {
+                    error.ControlNodeIdentityRejected => {
+                        allocator.free(routed_fs_url);
+                        std.log.warn("initial node lease refresh rejected saved node identity; clearing local node state and re-pairing", .{});
+                        state.deinit(allocator);
+                        try saveNodePairState(allocator, state_path, &state);
+                        continue;
+                    },
+                    else => std.log.warn("initial node lease refresh failed: {s}", .{@errorName(err)}),
+                };
+
+                break;
+            }
+            defer allocator.free(routed_fs_url);
+
+            var refresh_ctx = try allocator.create(LeaseRefreshContext);
+            defer allocator.destroy(refresh_ctx);
+            refresh_ctx.* = try LeaseRefreshContext.init(
                 allocator,
-                control_connect,
-                &service_registry,
-                &state,
-            ) catch |err| switch (err) {
-                error.ControlNodeIdentityRejected => {
-                    std.log.warn("paired node identity missing on control plane; clearing local node state and re-pairing", .{});
-                    state.deinit(allocator);
-                    try saveNodePairState(allocator, state_path, &state);
-                    continue;
+                .{
+                    .url = control_url_value,
+                    .auth_token = control_auth_token,
                 },
-                else => std.log.warn("initial node service catalog upsert failed: {s}", .{@errorName(err)}),
-            };
-
-            routed_fs_url = try buildControlRoutedFsUrl(
-                allocator,
-                control_url_value,
-                state.node_id.?,
-            );
-
-            refreshNodeLeaseOnce(
-                allocator,
-                control_connect,
                 state_path,
                 routed_fs_url,
                 &service_registry,
                 lease_ttl_ms,
+                refresh_interval_ms,
+                reconnect_backoff_ms,
+                reconnect_backoff_max_ms,
+            );
+            defer refresh_ctx.deinit();
+
+            var refresh_thread = try std.Thread.spawn(.{}, leaseRefreshThreadMain, .{refresh_ctx});
+            defer {
+                refresh_ctx.requestStop();
+                refresh_thread.join();
+            }
+
+            std.log.info("Starting spiderweb-fs-node control tunnel", .{});
+            std.log.info("Control pairing enabled via {s} ({s})", .{ control_url_value, @tagName(pair_mode) });
+            std.log.info("Advertised routed FS URL: {s}", .{routed_fs_url});
+            if (exports.items.len == 0) {
+                std.log.info("No exports configured via CLI; using default export name='work' path='.' rw", .{});
+            } else {
+                for (exports.items) |spec| {
+                    std.log.info("Export {s} => {s} ({s})", .{ spec.name, spec.path, if (spec.ro) "ro" else "rw" });
+                }
+            }
+
+            runControlRoutedNodeService(
+                allocator,
+                .{
+                    .url = control_url_value,
+                    .auth_token = control_auth_token,
+                },
+                exports.items,
+                state_path,
+                reconnect_backoff_ms,
+                reconnect_backoff_max_ms,
             ) catch |err| switch (err) {
-                error.ControlNodeIdentityRejected => {
-                    allocator.free(routed_fs_url);
-                    std.log.warn("initial node lease refresh rejected saved node identity; clearing local node state and re-pairing", .{});
+                error.ControlNodeIdentityRejected, error.PairingFailed => {
+                    std.log.warn("control tunnel rejected saved node identity; clearing local node state and re-pairing", .{});
                     state.deinit(allocator);
                     try saveNodePairState(allocator, state_path, &state);
                     continue;
                 },
-                else => std.log.warn("initial node lease refresh failed: {s}", .{@errorName(err)}),
+                else => return err,
             };
-
-            break;
+            return;
         }
-        defer allocator.free(routed_fs_url);
-
-        var refresh_ctx = try allocator.create(LeaseRefreshContext);
-        defer allocator.destroy(refresh_ctx);
-        refresh_ctx.* = try LeaseRefreshContext.init(
-            allocator,
-            .{
-                .url = control_url_value,
-                .auth_token = control_auth_token,
-            },
-            state_path,
-            routed_fs_url,
-            &service_registry,
-            lease_ttl_ms,
-            refresh_interval_ms,
-            reconnect_backoff_ms,
-            reconnect_backoff_max_ms,
-        );
-        defer refresh_ctx.deinit();
-
-        var refresh_thread = try std.Thread.spawn(.{}, leaseRefreshThreadMain, .{refresh_ctx});
-        defer {
-            refresh_ctx.requestStop();
-            refresh_thread.join();
-        }
-
-        std.log.info("Starting spiderweb-fs-node control tunnel", .{});
-        std.log.info("Control pairing enabled via {s} ({s})", .{ control_url_value, @tagName(pair_mode) });
-        std.log.info("Advertised routed FS URL: {s}", .{routed_fs_url});
-        if (exports.items.len == 0) {
-            std.log.info("No exports configured via CLI; using default export name='work' path='.' rw", .{});
-        } else {
-            for (exports.items) |spec| {
-                std.log.info("Export {s} => {s} ({s})", .{ spec.name, spec.path, if (spec.ro) "ro" else "rw" });
-            }
-        }
-
-        try runControlRoutedNodeService(
-            allocator,
-            .{
-                .url = control_url_value,
-                .auth_token = control_auth_token,
-            },
-            exports.items,
-            state_path,
-            reconnect_backoff_ms,
-            reconnect_backoff_max_ms,
-        );
-        return;
     }
 
     if (auth_token == null) {
@@ -1062,12 +1072,15 @@ fn runControlRoutedNodeService(
             continue;
         };
 
-        negotiateNodeTunnelHello(allocator, &stream, node_id, node_secret) catch |hello_err| {
-            const wait_ms = computeBackoff(reconnect_backoff_ms, reconnect_backoff_max_ms, attempts);
-            attempts +%= 1;
-            std.log.warn("control tunnel: fs hello failed: {s}; retrying in {d} ms", .{ @errorName(hello_err), wait_ms });
-            std.Thread.sleep(wait_ms * std.time.ns_per_ms);
-            continue;
+        negotiateNodeTunnelHello(allocator, &stream, node_id, node_secret) catch |hello_err| switch (hello_err) {
+            error.ControlNodeIdentityRejected => return error.ControlNodeIdentityRejected,
+            else => {
+                const wait_ms = computeBackoff(reconnect_backoff_ms, reconnect_backoff_max_ms, attempts);
+                attempts +%= 1;
+                std.log.warn("control tunnel: fs hello failed: {s}; retrying in {d} ms", .{ @errorName(hello_err), wait_ms });
+                std.Thread.sleep(wait_ms * std.time.ns_per_ms);
+                continue;
+            },
         };
 
         attempts = 0;
