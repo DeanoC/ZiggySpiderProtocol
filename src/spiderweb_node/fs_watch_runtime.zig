@@ -126,9 +126,9 @@ fn freePaths(allocator: std.mem.Allocator, paths: [][]u8) void {
     allocator.free(paths);
 }
 
-const InotifyWatcher = struct {
+const InotifyWatcher = if (builtin.os.tag == .linux) struct {
     allocator: std.mem.Allocator,
-    fd: i32,
+    fd: std.posix.fd_t,
     wd_paths: std.AutoHashMapUnmanaged(i32, []u8) = .{},
 
     fn init(allocator: std.mem.Allocator, roots: []const []const u8) !InotifyWatcher {
@@ -273,5 +273,15 @@ const InotifyWatcher = struct {
         if (self.wd_paths.fetchRemove(wd)) |removed| {
             self.allocator.free(removed.value);
         }
+    }
+} else struct {
+    fn init(_: std.mem.Allocator, _: []const []const u8) !InotifyWatcher {
+        return error.UnsupportedPlatform;
+    }
+
+    fn deinit(_: *InotifyWatcher) void {}
+
+    fn waitForChange(_: *InotifyWatcher, _: i32) !bool {
+        return false;
     }
 };
