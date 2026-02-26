@@ -6,6 +6,11 @@ pub const NodeLabelArg = struct {
     value: []const u8,
 };
 
+pub const ExtraServiceArg = struct {
+    service_id: []const u8,
+    service_json: []const u8,
+};
+
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     enable_fs_service: bool = true,
@@ -13,12 +18,14 @@ pub const Registry = struct {
     fs_rw_export_count: usize = 0,
     terminal_ids: std.ArrayListUnmanaged([]u8) = .{},
     labels: std.ArrayListUnmanaged(NodeLabel) = .{},
+    extra_services: std.ArrayListUnmanaged(ExtraService) = .{},
 
     pub const InitOptions = struct {
         enable_fs_service: bool = true,
         export_specs: []const fs_node_ops.ExportSpec = &.{},
         terminal_ids: []const []const u8 = &.{},
         labels: []const NodeLabelArg = &.{},
+        extra_services: []const ExtraServiceArg = &.{},
     };
 
     pub fn init(allocator: std.mem.Allocator, options: InitOptions) !Registry {
@@ -52,6 +59,10 @@ pub const Registry = struct {
             });
         }
 
+        for (options.extra_services) |item| {
+            try registry.addExtraService(item.service_id, item.service_json);
+        }
+
         return registry;
     }
 
@@ -75,6 +86,13 @@ pub const Registry = struct {
             });
         }
 
+        for (self.extra_services.items) |service| {
+            try copy.extra_services.append(allocator, .{
+                .service_id = try allocator.dupe(u8, service.service_id),
+                .service_json = try allocator.dupe(u8, service.service_json),
+            });
+        }
+
         return copy;
     }
 
@@ -83,7 +101,24 @@ pub const Registry = struct {
         self.terminal_ids.deinit(self.allocator);
         for (self.labels.items) |*label| label.deinit(self.allocator);
         self.labels.deinit(self.allocator);
+        for (self.extra_services.items) |*service| service.deinit(self.allocator);
+        self.extra_services.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    pub fn clearExtraServices(self: *Registry) void {
+        for (self.extra_services.items) |*service| service.deinit(self.allocator);
+        self.extra_services.clearRetainingCapacity();
+    }
+
+    pub fn addExtraService(self: *Registry, service_id: []const u8, service_json: []const u8) !void {
+        try validateIdentifier(service_id, 128);
+        if (serviceIdExists(self, service_id)) return error.InvalidProviderConfig;
+        try validateExtraServiceJson(self.allocator, service_id, service_json);
+        try self.extra_services.append(self.allocator, .{
+            .service_id = try self.allocator.dupe(u8, service_id),
+            .service_json = try self.allocator.dupe(u8, service_json),
+        });
     }
 
     pub fn buildServiceUpsertPayload(
@@ -141,6 +176,12 @@ pub const Registry = struct {
             service_count += 1;
         }
 
+        for (self.extra_services.items) |service| {
+            if (service_count > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, service.service_json);
+            service_count += 1;
+        }
+
         try out.appendSlice(allocator, "]}");
         return out.toOwnedSlice(allocator);
     }
@@ -157,12 +198,60 @@ const NodeLabel = struct {
     }
 };
 
+const ExtraService = struct {
+    service_id: []u8,
+    service_json: []u8,
+
+    fn deinit(self: *ExtraService, allocator: std.mem.Allocator) void {
+        allocator.free(self.service_id);
+        allocator.free(self.service_json);
+        self.* = undefined;
+    }
+};
+
 fn countRwExports(specs: []const fs_node_ops.ExportSpec) usize {
     var rw_count: usize = 0;
     for (specs) |spec| {
         if (!spec.ro) rw_count += 1;
     }
     return rw_count;
+}
+
+fn serviceIdExists(registry: *const Registry, service_id: []const u8) bool {
+    if (registry.enable_fs_service and std.mem.eql(u8, service_id, "fs")) return true;
+    for (registry.terminal_ids.items) |terminal_id| {
+        const prefix = "terminal-";
+        if (service_id.len != prefix.len + terminal_id.len) continue;
+        if (!std.mem.startsWith(u8, service_id, prefix)) continue;
+        if (std.mem.eql(u8, service_id[prefix.len..], terminal_id)) return true;
+    }
+    for (registry.extra_services.items) |item| {
+        if (std.mem.eql(u8, item.service_id, service_id)) return true;
+    }
+    return false;
+}
+
+fn validateExtraServiceJson(
+    allocator: std.mem.Allocator,
+    expected_service_id: []const u8,
+    service_json: []const u8,
+) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, service_json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidProviderConfig;
+
+    const service_id_val = parsed.value.object.get("service_id") orelse return error.InvalidProviderConfig;
+    if (service_id_val != .string) return error.InvalidProviderConfig;
+    if (!std.mem.eql(u8, service_id_val.string, expected_service_id)) return error.InvalidProviderConfig;
+
+    const kind_val = parsed.value.object.get("kind") orelse return error.InvalidProviderConfig;
+    if (kind_val != .string or kind_val.string.len == 0) return error.InvalidProviderConfig;
+
+    const state_val = parsed.value.object.get("state") orelse return error.InvalidProviderConfig;
+    if (state_val != .string or state_val.string.len == 0) return error.InvalidProviderConfig;
+
+    const endpoints_val = parsed.value.object.get("endpoints") orelse return error.InvalidProviderConfig;
+    if (endpoints_val != .array or endpoints_val.array.items.len == 0) return error.InvalidProviderConfig;
 }
 
 fn appendFsService(
@@ -177,11 +266,12 @@ fn appendFsService(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"rw\":{s},\"export_count\":{d}}}}}",
+        "{{\"service_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"rw\":{s},\"export_count\":{d}}},\"mounts\":[{{\"mount_id\":\"fs\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"fs_roots\":\"export-scoped\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin filesystem namespace driver\"}}",
         .{
             endpoint,
             if (registry.fs_rw_export_count > 0) "true" else "false",
             registry.fs_export_count,
+            endpoint,
         },
     );
 }
@@ -203,8 +293,8 @@ fn appendTerminalService(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\"}}}}",
-        .{ service_id, endpoint, escaped_terminal_id },
+        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\"}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin terminal namespace driver\"}}",
+        .{ service_id, endpoint, escaped_terminal_id, service_id, endpoint },
     );
 }
 
@@ -277,6 +367,10 @@ test "node_capability_providers: build service upsert payload includes fs and te
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"terminal-2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"export_count\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"site\":\"home-lab\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"mounts\":[{\"mount_id\":\"fs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"runtime\":{\"type\":\"builtin\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"permissions\":{\"default\":\"deny-by-default\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"ops\":{\"model\":\"namespace\"") != null);
 }
 
 test "node_capability_providers: duplicate terminal id rejected" {
@@ -284,4 +378,46 @@ test "node_capability_providers: duplicate terminal id rejected" {
     try std.testing.expectError(error.InvalidProviderConfig, Registry.init(allocator, .{
         .terminal_ids = &.{ "1", "1" },
     }));
+}
+
+test "node_capability_providers: supports extra namespace service payloads" {
+    const allocator = std.testing.allocator;
+    var registry = try Registry.init(allocator, .{
+        .enable_fs_service = false,
+    });
+    defer registry.deinit();
+
+    const camera_json =
+        \\{"service_id":"camera-main","kind":"camera","version":"1","state":"online","endpoints":["/nodes/node-1/camera"],"capabilities":{"still":true},"mounts":[{"mount_id":"camera-main","mount_path":"/nodes/node-1/camera","state":"online"}],"ops":{"model":"namespace","style":"plan9"},"runtime":{"type":"native_proc","abi":"namespace-driver-v1"},"permissions":{"default":"deny-by-default"},"schema":{"model":"namespace-mount"}}
+    ;
+    try registry.addExtraService("camera-main", camera_json);
+
+    const payload = try registry.buildServiceUpsertPayload(
+        allocator,
+        "node-1",
+        "secret-xyz",
+        "linux",
+        "amd64",
+        "native",
+    );
+    defer allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"camera-main\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"runtime\":{\"type\":\"native_proc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"mount_path\":\"/nodes/node-1/camera\"") != null);
+}
+
+test "node_capability_providers: rejects malformed extra service payloads" {
+    const allocator = std.testing.allocator;
+    var registry = try Registry.init(allocator, .{});
+    defer registry.deinit();
+
+    try std.testing.expectError(
+        error.InvalidProviderConfig,
+        registry.addExtraService("camera-main", "{\"service_id\":\"other\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"]}"),
+    );
+    try std.testing.expectError(
+        error.InvalidProviderConfig,
+        registry.addExtraService("camera-main", "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[]}"),
+    );
 }

@@ -3,6 +3,12 @@ pub const fs_node_server = @import("fs_node_server.zig");
 pub const fs_node_service = @import("fs_node_service.zig");
 pub const fs_node_ops = @import("fs_node_ops.zig");
 pub const node_capability_providers = @import("node_capability_providers.zig");
+pub const service_manifest = @import("service_manifest.zig");
+pub const namespace_driver = @import("namespace_driver.zig");
+pub const service_runtime_manager = @import("service_runtime_manager.zig");
+pub const plugin_loader_native = @import("plugin_loader_native.zig");
+pub const plugin_loader_process = @import("plugin_loader_process.zig");
+pub const plugin_loader_wasm = @import("plugin_loader_wasm.zig");
 
 pub const fs_source_adapter = @import("fs_source_adapter.zig");
 pub const fs_source_adapter_factory = @import("fs_source_adapter_factory.zig");
@@ -23,6 +29,12 @@ test {
     _ = fs_node_service;
     _ = fs_node_ops;
     _ = node_capability_providers;
+    _ = service_manifest;
+    _ = namespace_driver;
+    _ = service_runtime_manager;
+    _ = plugin_loader_native;
+    _ = plugin_loader_process;
+    _ = plugin_loader_wasm;
     _ = fs_source_adapter;
     _ = fs_source_adapter_factory;
     _ = fs_linux_source_adapter;

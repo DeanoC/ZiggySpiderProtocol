@@ -14,6 +14,12 @@ Shared Spiderweb protocol parsing/building utilities for Zig-based server and cl
 - `spiderweb_node` module:
   - Standalone node runtime components (`fs_node_main`, `fs_node_server`, `fs_node_ops`, pairing/service helpers)
   - Source adapter stack (linux/posix/windows/gdrive/namespace/local)
+  - Namespace service model and runtime scaffolding:
+    - `node_capability_providers` (built-in + extra service catalog payloads)
+    - `service_manifest` (manifest loader for service descriptors)
+    - `namespace_driver` (driver/runtime descriptor contracts)
+    - `service_runtime_manager` (service lifecycle registry)
+    - `plugin_loader_native`, `plugin_loader_process`, `plugin_loader_wasm` (runtime loader scaffolds)
 
 ## Build
 

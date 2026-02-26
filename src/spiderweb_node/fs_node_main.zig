@@ -5,6 +5,10 @@ const fs_node_service = @import("fs_node_service.zig");
 const fs_node_ops = @import("fs_node_ops.zig");
 const fs_protocol = @import("spiderweb_fs").fs_protocol;
 const node_capability_providers = @import("node_capability_providers.zig");
+const plugin_loader_native = @import("plugin_loader_native.zig");
+const plugin_loader_process = @import("plugin_loader_process.zig");
+const plugin_loader_wasm = @import("plugin_loader_wasm.zig");
+const service_manifest = @import("service_manifest.zig");
 const unified = @import("ziggy-spider-protocol").unified;
 
 const default_state_path = ".spiderweb-fs-node-state.json";
@@ -264,6 +268,10 @@ pub fn main() !void {
     defer terminal_ids.deinit(allocator);
     var service_labels = std.ArrayListUnmanaged(node_capability_providers.NodeLabelArg){};
     defer service_labels.deinit(allocator);
+    var service_manifest_paths = std.ArrayListUnmanaged([]const u8){};
+    defer service_manifest_paths.deinit(allocator);
+    var services_dirs = std.ArrayListUnmanaged([]const u8){};
+    defer services_dirs.deinit(allocator);
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -344,6 +352,14 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             try service_labels.append(allocator, try parseLabelArg(args[i]));
+        } else if (std.mem.eql(u8, arg, "--service-manifest")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try service_manifest_paths.append(allocator, args[i]);
+        } else if (std.mem.eql(u8, arg, "--services-dir")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            try services_dirs.append(allocator, args[i]);
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             try printHelp();
             return;
@@ -440,6 +456,15 @@ pub fn main() !void {
                         }
                     }
                 }
+
+                service_registry.clearExtraServices();
+                try loadConfiguredManifestServices(
+                    allocator,
+                    state.node_id.?,
+                    service_manifest_paths.items,
+                    services_dirs.items,
+                    &service_registry,
+                );
 
                 upsertNodeServiceCatalog(
                     allocator,
@@ -556,6 +581,15 @@ pub fn main() !void {
         }
     }
 
+    service_registry.clearExtraServices();
+    try loadConfiguredManifestServices(
+        allocator,
+        node_name,
+        service_manifest_paths.items,
+        services_dirs.items,
+        &service_registry,
+    );
+
     std.log.info("Starting spiderweb-fs-node on {s}:{d}", .{ bind_addr, port });
     if (auth_token != null) {
         std.log.info("FS node session auth enabled", .{});
@@ -584,6 +618,154 @@ fn parseLabelArg(raw: []const u8) !node_capability_providers.NodeLabelArg {
         .key = raw[0..eq_idx],
         .value = raw[eq_idx + 1 ..],
     };
+}
+
+fn loadConfiguredManifestServices(
+    allocator: std.mem.Allocator,
+    node_id: []const u8,
+    manifest_paths: []const []const u8,
+    service_dirs: []const []const u8,
+    registry: *node_capability_providers.Registry,
+) !void {
+    var loaded = std.ArrayListUnmanaged(service_manifest.LoadedService){};
+    defer {
+        for (loaded.items) |*item| item.deinit(allocator);
+        loaded.deinit(allocator);
+    }
+
+    for (manifest_paths) |manifest_path| {
+        const maybe_loaded = try service_manifest.loadServiceManifestFile(
+            allocator,
+            manifest_path,
+            node_id,
+        );
+        if (maybe_loaded) |item| try loaded.append(allocator, item);
+    }
+
+    for (service_dirs) |dir_path| {
+        try service_manifest.loadServiceManifestDirectory(
+            allocator,
+            dir_path,
+            node_id,
+            &loaded,
+        );
+    }
+
+    if (loaded.items.len == 0) return;
+
+    var ids = std.StringHashMapUnmanaged(void){};
+    defer ids.deinit(allocator);
+    for (loaded.items) |item| {
+        if (ids.contains(item.service_id)) return error.InvalidArguments;
+        try ids.put(allocator, item.service_id, {});
+    }
+
+    for (loaded.items) |item| {
+        try validateServiceRuntimeConfig(allocator, item.service_json);
+        try registry.addExtraService(item.service_id, item.service_json);
+        std.log.info("Loaded service manifest: {s}", .{item.service_id});
+    }
+}
+
+fn validateServiceRuntimeConfig(
+    allocator: std.mem.Allocator,
+    service_json: []const u8,
+) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, service_json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidArguments;
+
+    const runtime = parsed.value.object.get("runtime") orelse return;
+    if (runtime != .object) return error.InvalidArguments;
+
+    const runtime_type = blk: {
+        if (runtime.object.get("type")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidArguments;
+            break :blk value.string;
+        }
+        break :blk "builtin";
+    };
+
+    if (std.mem.eql(u8, runtime_type, "builtin")) return;
+
+    if (std.mem.eql(u8, runtime_type, "native_proc")) {
+        const executable_path = blk: {
+            if (runtime.object.get("executable_path")) |value| {
+                if (value != .string) return error.InvalidArguments;
+                break :blk value.string;
+            }
+            break :blk null;
+        };
+        if (executable_path) |path| {
+            var args = std.ArrayListUnmanaged([]const u8){};
+            defer args.deinit(allocator);
+            if (runtime.object.get("args")) |value| {
+                if (value != .array) return error.InvalidArguments;
+                for (value.array.items) |item| {
+                    if (item != .string) return error.InvalidArguments;
+                    try args.append(allocator, item.string);
+                }
+            }
+            var handle = try plugin_loader_process.launch(allocator, .{
+                .executable_path = path,
+                .args = args.items,
+            });
+            defer handle.deinit(allocator);
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, runtime_type, "native_inproc")) {
+        const library_path = blk: {
+            if (runtime.object.get("library_path")) |value| {
+                if (value != .string) return error.InvalidArguments;
+                break :blk value.string;
+            }
+            break :blk null;
+        };
+        if (library_path) |path| {
+            const in_process = blk: {
+                if (runtime.object.get("in_process")) |value| {
+                    if (value != .bool) return error.InvalidArguments;
+                    break :blk value.bool;
+                }
+                break :blk true;
+            };
+            var handle = try plugin_loader_native.load(allocator, .{
+                .library_path = path,
+                .in_process = in_process,
+            });
+            defer handle.deinit(allocator);
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, runtime_type, "wasm")) {
+        const module_path = blk: {
+            if (runtime.object.get("module_path")) |value| {
+                if (value != .string) return error.InvalidArguments;
+                break :blk value.string;
+            }
+            break :blk null;
+        };
+        if (module_path) |path| {
+            const entrypoint = blk: {
+                if (runtime.object.get("entrypoint")) |value| {
+                    if (value != .string or value.string.len == 0) return error.InvalidArguments;
+                    break :blk value.string;
+                }
+                break :blk "spiderweb_driver_v1";
+            };
+            var handle = try plugin_loader_wasm.load(allocator, .{
+                .module_path = path,
+                .entrypoint = entrypoint,
+            });
+            defer handle.deinit(allocator);
+        }
+        return;
+    }
+
+    return error.InvalidArguments;
 }
 
 fn upsertNodeServiceCatalog(
@@ -1785,7 +1967,8 @@ fn printHelp() !void {
         \\                    [--control-url <ws-url> [--control-auth-token <token>] [--pair-mode <invite|request>] [--invite-token <token>]
         \\                     [--operator-token <token>] [--node-name <name>] [--fs-url <ws-url>] [--state-file <path>]
         \\                     [--lease-ttl-ms <ms>] [--refresh-interval-ms <ms>] [--reconnect-backoff-ms <ms>] [--reconnect-backoff-max-ms <ms>]
-        \\                     [--no-fs-service] [--terminal-id <id>] [--label <key=value>]]
+        \\                     [--no-fs-service] [--terminal-id <id>] [--label <key=value>]
+        \\                     [--service-manifest <path>] [--services-dir <path>]]
         \\
         \\Examples:
         \\  spiderweb-fs-node --export work=.:rw
@@ -1795,6 +1978,8 @@ fn printHelp() !void {
         \\  spiderweb-fs-node --control-url ws://127.0.0.1:18790/ --pair-mode invite --invite-token invite-abc --node-name clawz --fs-url ws://10.0.0.8:18891/v2/fs
         \\  spiderweb-fs-node --control-url ws://127.0.0.1:18790/ --pair-mode request --node-name edge-1 --state-file ./node-state.json
         \\  spiderweb-fs-node --control-url ws://127.0.0.1:18790/ --pair-mode request --terminal-id 1 --terminal-id 2 --label site=hq --label tier=edge
+        \\  spiderweb-fs-node --control-url ws://127.0.0.1:18790/ --pair-mode request --services-dir ./services.d
+        \\  spiderweb-fs-node --service-manifest ./services.d/camera.json
         \\  (control auth token can come from SPIDERWEB_AUTH_TOKEN when --control-url is used)
         \\  (standalone fs auth token can come from SPIDERWEB_FS_NODE_AUTH_TOKEN when --control-url is not used)
         \\
@@ -1814,6 +1999,77 @@ test "fs_node_main: parseLabelArg validates key-value format" {
     try std.testing.expectEqualStrings("home-lab", parsed.value);
     try std.testing.expectError(error.InvalidArguments, parseLabelArg("missing"));
     try std.testing.expectError(error.InvalidArguments, parseLabelArg("=empty"));
+}
+
+test "fs_node_main: loads extra services from manifest file" {
+    const allocator = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+
+    try temp.dir.writeFile(.{
+        .sub_path = "camera.json",
+        .data =
+        \\{
+        \\  "service_id": "camera-main",
+        \\  "kind": "camera",
+        \\  "endpoints": ["/nodes/{node_id}/camera"],
+        \\  "mounts": [{"mount_id":"camera-main","mount_path":"/nodes/{node_id}/camera","state":"online"}]
+        \\}
+        ,
+    });
+
+    const root = try temp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+    const manifest_path = try std.fmt.allocPrint(allocator, "{s}/camera.json", .{root});
+    defer allocator.free(manifest_path);
+
+    var registry = try node_capability_providers.Registry.init(allocator, .{
+        .enable_fs_service = false,
+    });
+    defer registry.deinit();
+
+    try loadConfiguredManifestServices(
+        allocator,
+        "node-5",
+        &.{manifest_path},
+        &.{},
+        &registry,
+    );
+
+    const payload = try registry.buildServiceUpsertPayload(
+        allocator,
+        "node-5",
+        "secret",
+        "linux",
+        "amd64",
+        "native",
+    );
+    defer allocator.free(payload);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"camera-main\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"/nodes/node-5/camera\"") != null);
+}
+
+test "fs_node_main: runtime validator accepts declarative runtime metadata" {
+    const allocator = std.testing.allocator;
+    try validateServiceRuntimeConfig(
+        allocator,
+        "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_proc\"}}",
+    );
+    try validateServiceRuntimeConfig(
+        allocator,
+        "{\"service_id\":\"pdf-wasm\",\"kind\":\"converter\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/convert\"],\"runtime\":{\"type\":\"wasm\"}}",
+    );
+}
+
+test "fs_node_main: runtime validator rejects unknown runtime type" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.InvalidArguments,
+        validateServiceRuntimeConfig(
+            allocator,
+            "{\"service_id\":\"bad\",\"kind\":\"custom\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/custom\"],\"runtime\":{\"type\":\"mystery\"}}",
+        ),
+    );
 }
 
 test "fs_node_main: control node identity error codes are detected" {
