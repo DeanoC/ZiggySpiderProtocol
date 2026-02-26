@@ -1160,7 +1160,9 @@ fn negotiateNodeTunnelHello(
                 const msg_type = parsed.acheron_type orelse continue;
                 if (msg_type == .fs_r_hello) return;
                 if (msg_type == .fs_err) {
-                    if (isNodeIdentityFsHelloError(parsed.payload_json)) return error.ControlNodeIdentityRejected;
+                    if (parsed.payload_json) |payload_json| {
+                        if (isNodeIdentityFsHelloError(payload_json)) return error.ControlNodeIdentityRejected;
+                    }
                     return error.ControlRequestFailed;
                 }
                 continue;
