@@ -31,8 +31,14 @@ pub const ControlType = enum {
     auth_status,
     auth_rotate,
     node_invite_create,
+    node_join_request,
+    node_join_pending_list,
+    node_join_approve,
+    node_join_deny,
     node_join,
     node_lease_refresh,
+    node_service_upsert,
+    node_service_get,
     node_list,
     node_get,
     node_delete,
@@ -183,8 +189,14 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.auth_status")) return .auth_status;
     if (std.mem.eql(u8, value, "control.auth_rotate")) return .auth_rotate;
     if (std.mem.eql(u8, value, "control.node_invite_create")) return .node_invite_create;
+    if (std.mem.eql(u8, value, "control.node_join_request")) return .node_join_request;
+    if (std.mem.eql(u8, value, "control.node_join_pending_list")) return .node_join_pending_list;
+    if (std.mem.eql(u8, value, "control.node_join_approve")) return .node_join_approve;
+    if (std.mem.eql(u8, value, "control.node_join_deny")) return .node_join_deny;
     if (std.mem.eql(u8, value, "control.node_join")) return .node_join;
     if (std.mem.eql(u8, value, "control.node_lease_refresh")) return .node_lease_refresh;
+    if (std.mem.eql(u8, value, "control.node_service_upsert")) return .node_service_upsert;
+    if (std.mem.eql(u8, value, "control.node_service_get")) return .node_service_get;
     if (std.mem.eql(u8, value, "control.node_list")) return .node_list;
     if (std.mem.eql(u8, value, "control.node_get")) return .node_get;
     if (std.mem.eql(u8, value, "control.node_delete")) return .node_delete;
@@ -302,8 +314,14 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .auth_status => "control.auth_status",
         .auth_rotate => "control.auth_rotate",
         .node_invite_create => "control.node_invite_create",
+        .node_join_request => "control.node_join_request",
+        .node_join_pending_list => "control.node_join_pending_list",
+        .node_join_approve => "control.node_join_approve",
+        .node_join_deny => "control.node_join_deny",
         .node_join => "control.node_join",
         .node_lease_refresh => "control.node_lease_refresh",
+        .node_service_upsert => "control.node_service_upsert",
+        .node_service_get => "control.node_service_get",
         .node_list => "control.node_list",
         .node_get => "control.node_get",
         .node_delete => "control.node_delete",
@@ -408,6 +426,9 @@ test "unified_types: v2 control names round-trip as canonical strings" {
     try std.testing.expectEqual(ControlType.connect, controlTypeFromString(controlTypeName(.connect)));
     try std.testing.expectEqual(ControlType.session_attach, controlTypeFromString(controlTypeName(.session_attach)));
     try std.testing.expectEqual(ControlType.session_status, controlTypeFromString(controlTypeName(.session_status)));
+    try std.testing.expectEqual(ControlType.node_join_request, controlTypeFromString(controlTypeName(.node_join_request)));
+    try std.testing.expectEqual(ControlType.node_join_approve, controlTypeFromString(controlTypeName(.node_join_approve)));
+    try std.testing.expectEqual(ControlType.node_service_upsert, controlTypeFromString(controlTypeName(.node_service_upsert)));
     try std.testing.expectEqual(ControlType.project_mount_set, controlTypeFromString(controlTypeName(.project_mount_set)));
     try std.testing.expectEqual(ControlType.workspace_status, controlTypeFromString(controlTypeName(.workspace_status)));
     try std.testing.expectEqual(ControlType.reconcile_status, controlTypeFromString(controlTypeName(.reconcile_status)));
