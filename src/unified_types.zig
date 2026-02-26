@@ -23,6 +23,8 @@ pub const ControlType = enum {
     session_resume,
     session_list,
     session_close,
+    session_restore,
+    session_history,
     debug_subscribe,
     debug_unsubscribe,
     ping,
@@ -183,6 +185,8 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.session_resume")) return .session_resume;
     if (std.mem.eql(u8, value, "control.session_list")) return .session_list;
     if (std.mem.eql(u8, value, "control.session_close")) return .session_close;
+    if (std.mem.eql(u8, value, "control.session_restore")) return .session_restore;
+    if (std.mem.eql(u8, value, "control.session_history")) return .session_history;
     if (std.mem.eql(u8, value, "control.debug_subscribe")) return .debug_subscribe;
     if (std.mem.eql(u8, value, "control.debug_unsubscribe")) return .debug_unsubscribe;
     if (std.mem.eql(u8, value, "control.ping")) return .ping;
@@ -310,6 +314,8 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .session_resume => "control.session_resume",
         .session_list => "control.session_list",
         .session_close => "control.session_close",
+        .session_restore => "control.session_restore",
+        .session_history => "control.session_history",
         .debug_subscribe => "control.debug_subscribe",
         .debug_unsubscribe => "control.debug_unsubscribe",
         .ping => "control.ping",
@@ -432,6 +438,8 @@ test "unified_types: v2 control names round-trip as canonical strings" {
     try std.testing.expectEqual(ControlType.connect, controlTypeFromString(controlTypeName(.connect)));
     try std.testing.expectEqual(ControlType.session_attach, controlTypeFromString(controlTypeName(.session_attach)));
     try std.testing.expectEqual(ControlType.session_status, controlTypeFromString(controlTypeName(.session_status)));
+    try std.testing.expectEqual(ControlType.session_restore, controlTypeFromString(controlTypeName(.session_restore)));
+    try std.testing.expectEqual(ControlType.session_history, controlTypeFromString(controlTypeName(.session_history)));
     try std.testing.expectEqual(ControlType.node_join_request, controlTypeFromString(controlTypeName(.node_join_request)));
     try std.testing.expectEqual(ControlType.node_join_approve, controlTypeFromString(controlTypeName(.node_join_approve)));
     try std.testing.expectEqual(ControlType.node_service_upsert, controlTypeFromString(controlTypeName(.node_service_upsert)));
