@@ -1683,8 +1683,8 @@ fn streamWriteAll(stream: *std.net.Stream, data: []const u8) !void {
             const sent = std.posix.send(stream.handle, data[offset..], 0) catch |err| switch (err) {
                 error.ConnectionResetByPeer,
                 error.BrokenPipe,
-                => error.ConnectionClosed,
-                else => err,
+                => return error.ConnectionClosed,
+                else => return err,
             };
             if (sent == 0) return error.ConnectionClosed;
             offset += sent;
