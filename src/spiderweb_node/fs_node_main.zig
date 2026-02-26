@@ -9,6 +9,7 @@ const plugin_loader_native = @import("plugin_loader_native.zig");
 const plugin_loader_process = @import("plugin_loader_process.zig");
 const plugin_loader_wasm = @import("plugin_loader_wasm.zig");
 const service_manifest = @import("service_manifest.zig");
+const service_runtime_manager = @import("service_runtime_manager.zig");
 const unified = @import("ziggy-spider-protocol").unified;
 
 const default_state_path = ".spiderweb-fs-node-state.json";
@@ -653,6 +654,9 @@ fn loadConfiguredManifestServices(
 
     if (loaded.items.len == 0) return;
 
+    var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
+    defer runtime_manager.deinit();
+
     var ids = std.StringHashMapUnmanaged(void){};
     defer ids.deinit(allocator);
     for (loaded.items) |item| {
@@ -662,9 +666,13 @@ fn loadConfiguredManifestServices(
 
     for (loaded.items) |item| {
         try validateServiceRuntimeConfig(allocator, item.service_json);
+        try runtime_manager.registerFromServiceJson(item.service_json);
         try registry.addExtraService(item.service_id, item.service_json);
         std.log.info("Loaded service manifest: {s}", .{item.service_id});
     }
+
+    try runtime_manager.startAll();
+    runtime_manager.stopAll();
 }
 
 fn validateServiceRuntimeConfig(
