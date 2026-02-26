@@ -1481,7 +1481,7 @@ fn performClientHandshake(
     );
     defer allocator.free(request);
 
-    try stream.writeAll(request);
+    try streamWriteAll(stream, request);
 
     const response = try readHttpResponse(allocator, stream, 8 * 1024);
     defer allocator.free(response);
@@ -1496,7 +1496,7 @@ fn readHttpResponse(allocator: std.mem.Allocator, stream: *std.net.Stream, max_b
 
     var chunk: [512]u8 = undefined;
     while (out.items.len < max_bytes) {
-        const n = try stream.read(&chunk);
+        const n = try streamRead(stream, &chunk);
         if (n == 0) return error.ConnectionClosed;
         try out.appendSlice(allocator, chunk[0..n]);
         if (std.mem.indexOf(u8, out.items, "\r\n\r\n") != null) {
@@ -1650,17 +1650,49 @@ fn writeClientFrameMasked(allocator: std.mem.Allocator, stream: *std.net.Stream,
         masked[idx] = byte ^ mask_key[idx % 4];
     }
 
-    try stream.writeAll(header[0..header_len]);
-    if (masked.len > 0) try stream.writeAll(masked);
+    try streamWriteAll(stream, header[0..header_len]);
+    if (masked.len > 0) try streamWriteAll(stream, masked);
 }
 
 fn readExact(stream: *std.net.Stream, out: []u8) !void {
     var offset: usize = 0;
     while (offset < out.len) {
-        const n = try stream.read(out[offset..]);
+        const n = try streamRead(stream, out[offset..]);
         if (n == 0) return error.EndOfStream;
         offset += n;
     }
+}
+
+fn streamRead(stream: *std.net.Stream, out: []u8) !usize {
+    if (builtin.os.tag == .windows) {
+        return std.posix.recv(stream.handle, out, 0) catch |err| switch (err) {
+            error.ConnectionResetByPeer,
+            error.SocketNotConnected,
+            error.ConnectionTimedOut,
+            => error.ConnectionClosed,
+            else => err,
+        };
+    }
+    return stream.read(out);
+}
+
+fn streamWriteAll(stream: *std.net.Stream, data: []const u8) !void {
+    if (builtin.os.tag == .windows) {
+        var offset: usize = 0;
+        while (offset < data.len) {
+            const sent = std.posix.send(stream.handle, data[offset..], 0) catch |err| switch (err) {
+                error.ConnectionResetByPeer,
+                error.SocketNotConnected,
+                error.BrokenPipe,
+                => error.ConnectionClosed,
+                else => err,
+            };
+            if (sent == 0) return error.ConnectionClosed;
+            offset += sent;
+        }
+        return;
+    }
+    try stream.writeAll(data);
 }
 
 fn jsonEscape(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
