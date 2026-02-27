@@ -2588,35 +2588,40 @@ fn runControlRoutedNodeService(
         while (true) {
             const now_ms = std.time.milliTimestamp();
             if (now_ms >= next_manifest_reload_ms) {
-                const changed = refreshControlRuntimeForNode(
-                    allocator,
-                    &state,
-                    base_exports,
-                    static_namespace_exports,
-                    service_manifest_paths,
-                    services_dirs,
-                    service_registry,
-                    shared_service_registry,
-                    &runtime_manager,
-                    &runtime_probe_store,
-                    &runtime_namespace_exports,
-                    &effective_exports,
-                    &service,
-                    runtime_state_path,
-                    &last_manifest_payload,
-                ) catch |reload_err| {
-                    std.log.warn("control tunnel: manifest reload failed: {s}", .{@errorName(reload_err)});
-                    false;
+                const changed = blk: {
+                    break :blk refreshControlRuntimeForNode(
+                        allocator,
+                        &state,
+                        base_exports,
+                        static_namespace_exports,
+                        service_manifest_paths,
+                        services_dirs,
+                        service_registry,
+                        shared_service_registry,
+                        &runtime_manager,
+                        &runtime_probe_store,
+                        &runtime_namespace_exports,
+                        &effective_exports,
+                        &service,
+                        runtime_state_path,
+                        &last_manifest_payload,
+                    ) catch |reload_err| {
+                        std.log.warn("control tunnel: manifest reload failed: {s}", .{@errorName(reload_err)});
+                        break :blk false;
+                    };
                 };
                 if (changed) {
-                    _ = applyRuntimeManagerStateToServiceRegistry(
-                        allocator,
-                        service_registry,
-                        &runtime_manager,
-                    ) catch |sync_err| {
-                        std.log.warn("control tunnel: runtime state overlay failed after reload: {s}", .{@errorName(sync_err)});
-                        false;
+                    const overlay_changed = blk: {
+                        break :blk applyRuntimeManagerStateToServiceRegistry(
+                            allocator,
+                            service_registry,
+                            &runtime_manager,
+                        ) catch |sync_err| {
+                            std.log.warn("control tunnel: runtime state overlay failed after reload: {s}", .{@errorName(sync_err)});
+                            break :blk false;
+                        };
                     };
+                    _ = overlay_changed;
                     shared_service_registry.replaceFrom(service_registry) catch |replace_err| {
                         std.log.warn("control tunnel: shared service registry replace failed after reload: {s}", .{@errorName(replace_err)});
                     };
