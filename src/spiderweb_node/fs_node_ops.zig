@@ -1492,7 +1492,7 @@ pub const NodeOps = struct {
         defer invoke_result.deinit(self.allocator);
         const finished_ms: i64 = std.time.milliTimestamp();
         const duration_ms: u64 = @intCast(@max(@as(i64, 0), finished_ms - started_ms));
-        const timeout_hit = service_cfg.timeout_ms > 0 and duration_ms > service_cfg.timeout_ms;
+        const timeout_hit = invoke_result.timed_out or (service_cfg.runtime_kind == .native_inproc and service_cfg.timeout_ms > 0 and duration_ms > service_cfg.timeout_ms);
         stats.last_finished_ms = finished_ms;
         stats.last_duration_ms = duration_ms;
         stats.last_exit_code = invoke_result.exit_code;
@@ -1532,7 +1532,7 @@ pub const NodeOps = struct {
         const stderr_content = if (invoke_result.stderr.len > 0)
             invoke_result.stderr
         else if (timeout_hit)
-            "service invocation exceeded timeout_ms"
+            "service invocation terminated after timeout_ms"
         else
             "service process failed";
         try self.namespaceSetFileContent(ns, error_id, stderr_content);
@@ -1564,6 +1564,7 @@ pub const NodeOps = struct {
         stderr: []u8,
         exit_code: i32,
         success: bool,
+        timed_out: bool = false,
 
         fn deinit(self: *ServiceProcessResult, allocator: std.mem.Allocator) void {
             allocator.free(self.stdout);
@@ -1584,7 +1585,7 @@ pub const NodeOps = struct {
                 defer argv.deinit(self.allocator);
                 try argv.append(self.allocator, executable_path);
                 for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
-                return self.executeNamespaceServiceCommandArgv(argv.items, payload);
+                return self.executeNamespaceServiceCommandArgv(argv.items, payload, service_cfg.timeout_ms);
             },
             .native_inproc => self.executeNamespaceServiceInproc(service_cfg, payload),
             .wasm => self.executeNamespaceServiceWasm(service_cfg, payload),
@@ -1595,6 +1596,7 @@ pub const NodeOps = struct {
         self: *NodeOps,
         command_argv: []const []const u8,
         payload: []const u8,
+        timeout_ms: u64,
     ) !ServiceProcessResult {
         if (command_argv.len == 0) return error.InvalidArguments;
         var argv_list = std.ArrayListUnmanaged([]const u8){};
@@ -1619,21 +1621,26 @@ pub const NodeOps = struct {
         defer stdout.deinit(self.allocator);
         var stderr = std.ArrayList(u8).empty;
         defer stderr.deinit(self.allocator);
-        try child.collectOutput(self.allocator, &stdout, &stderr, max_write_bytes);
-        const term = try child.wait();
+        const timed_out = try self.collectChildOutputWithTimeout(&child, &stdout, &stderr, max_write_bytes, timeout_ms);
+        const term = if (timed_out)
+            try self.terminateChildForTimeout(&child)
+        else
+            try child.wait();
 
         return switch (term) {
             .Exited => |code| .{
                 .stdout = try stdout.toOwnedSlice(self.allocator),
                 .stderr = try stderr.toOwnedSlice(self.allocator),
                 .exit_code = code,
-                .success = code == 0,
+                .success = code == 0 and !timed_out,
+                .timed_out = timed_out,
             },
             else => .{
                 .stdout = try stdout.toOwnedSlice(self.allocator),
                 .stderr = try stderr.toOwnedSlice(self.allocator),
                 .exit_code = -1,
                 .success = false,
+                .timed_out = timed_out,
             },
         };
     }
@@ -1656,7 +1663,7 @@ pub const NodeOps = struct {
             stderr_ptr: [*]u8,
             stderr_cap: usize,
             stderr_len: *usize,
-        ) callconv(.C) i32;
+        ) callconv(.c) i32;
 
         const invoke_fn = lib.lookup(InprocInvokeFn, namespace_service_inproc_invoke_symbol) orelse return error.MissingSymbol;
 
@@ -1684,6 +1691,7 @@ pub const NodeOps = struct {
             .stderr = try self.allocator.dupe(u8, stderr_buffer[0..stderr_len]),
             .exit_code = exit_code,
             .success = exit_code == 0,
+            .timed_out = false,
         };
     }
 
@@ -1705,7 +1713,88 @@ pub const NodeOps = struct {
         }
         try argv.append(self.allocator, module_path);
         for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
-        return self.executeNamespaceServiceCommandArgv(argv.items, payload);
+        return self.executeNamespaceServiceCommandArgv(argv.items, payload, service_cfg.timeout_ms);
+    }
+
+    fn collectChildOutputWithTimeout(
+        self: *NodeOps,
+        child: *std.process.Child,
+        stdout: *std.ArrayList(u8),
+        stderr: *std.ArrayList(u8),
+        max_output_bytes: usize,
+        timeout_ms: u64,
+    ) !bool {
+        std.debug.assert(child.stdout_behavior == .Pipe);
+        std.debug.assert(child.stderr_behavior == .Pipe);
+
+        var poller = std.Io.poll(self.allocator, enum { stdout, stderr }, .{
+            .stdout = child.stdout.?,
+            .stderr = child.stderr.?,
+        });
+        defer poller.deinit();
+
+        const stdout_r = poller.reader(.stdout);
+        stdout_r.buffer = stdout.allocatedSlice();
+        stdout_r.seek = 0;
+        stdout_r.end = stdout.items.len;
+
+        const stderr_r = poller.reader(.stderr);
+        stderr_r.buffer = stderr.allocatedSlice();
+        stderr_r.seek = 0;
+        stderr_r.end = stderr.items.len;
+
+        defer {
+            stdout.* = .{
+                .items = stdout_r.buffer[0..stdout_r.end],
+                .capacity = stdout_r.buffer.len,
+            };
+            stderr.* = .{
+                .items = stderr_r.buffer[0..stderr_r.end],
+                .capacity = stderr_r.buffer.len,
+            };
+            stdout_r.buffer = &.{};
+            stderr_r.buffer = &.{};
+        }
+
+        if (timeout_ms == 0) {
+            while (try poller.poll()) {
+                if (stdout_r.bufferedLen() > max_output_bytes) return error.StdoutStreamTooLong;
+                if (stderr_r.bufferedLen() > max_output_bytes) return error.StderrStreamTooLong;
+            }
+            return false;
+        }
+
+        const started_ms = std.time.milliTimestamp();
+        while (true) {
+            const now_ms = std.time.milliTimestamp();
+            const elapsed_ms: u64 = @intCast(@max(@as(i64, 0), now_ms - started_ms));
+            if (elapsed_ms >= timeout_ms) return true;
+
+            const remaining_ms = timeout_ms - elapsed_ms;
+            const wait_ms = @max(@as(u64, 1), @min(remaining_ms, 100));
+            const has_more = try poller.pollTimeout(wait_ms * std.time.ns_per_ms);
+            if (stdout_r.bufferedLen() > max_output_bytes) return error.StdoutStreamTooLong;
+            if (stderr_r.bufferedLen() > max_output_bytes) return error.StderrStreamTooLong;
+            if (!has_more) return false;
+        }
+    }
+
+    fn terminateChildForTimeout(
+        self: *NodeOps,
+        child: *std.process.Child,
+    ) !std.process.Child.Term {
+        _ = self;
+        if (builtin.os.tag == .windows) {
+            return child.killWindows(124) catch try child.wait();
+        }
+        if (builtin.os.tag == .wasi) {
+            return child.kill() catch try child.wait();
+        }
+        std.posix.kill(child.id, std.posix.SIG.KILL) catch |err| switch (err) {
+            error.ProcessNotFound => {},
+            else => return err,
+        };
+        return try child.wait();
     }
 
     fn namespaceServiceStatsPtr(self: *NodeOps, export_index: usize) !*NamespaceServiceRuntimeStats {
@@ -5527,6 +5616,108 @@ test "fs_node_ops: namespace service reset control restores idle status files" {
     try std.testing.expectEqualStrings("{\"state\":\"idle\"}", status_node_after.content);
     try std.testing.expectEqualStrings("", error_node_after.content);
     try std.testing.expectEqualStrings("{\"state\":\"idle\"}", result_node_after.content);
+}
+
+test "fs_node_ops: namespace service hard timeout kills process runtime" {
+    const allocator = std.testing.allocator;
+
+    const runtime_exe, const runtime_args = if (builtin.os.tag == .windows)
+        .{ "cmd.exe", &[_][]const u8{ "/C", "ping -n 6 127.0.0.1 >NUL" } }
+    else
+        .{ "sh", &[_][]const u8{ "-lc", "sleep 5" } };
+
+    var node_ops = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = "svc-timeout",
+            .path = "service:timeout",
+            .source_kind = .namespace,
+            .source_id = "service:timeout",
+            .ro = false,
+            .namespace_service = .{
+                .service_id = "timeout-test",
+                .runtime_kind = .native_proc,
+                .executable_path = runtime_exe,
+                .args = runtime_args,
+                .timeout_ms = 100,
+                .help_md = "Timeout service",
+            },
+        },
+    });
+    defer node_ops.deinit();
+
+    const service_idx = node_ops.exportByName("svc-timeout").?;
+    const root_id = node_ops.exports.items[service_idx].root_node_id;
+    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const error_id = ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
+    const metrics_id = ns.path_to_node.get("/metrics.json") orelse return error.TestExpectedResponse;
+
+    const control_lookup_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":1,\"op\":\"LOOKUP\",\"node\":{d},\"a\":{{\"name\":\"control\"}}}}",
+        .{root_id},
+    );
+    defer allocator.free(control_lookup_json);
+    var control_lookup_req = try fs_protocol.parseRequest(allocator, control_lookup_json);
+    defer control_lookup_req.deinit();
+    var control_lookup_result = node_ops.dispatch(control_lookup_req);
+    defer control_lookup_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, control_lookup_result.err_no);
+
+    var control_lookup_parsed = try std.json.parseFromSlice(std.json.Value, allocator, control_lookup_result.result_json.?, .{});
+    defer control_lookup_parsed.deinit();
+    const control_id: u64 = @intCast(control_lookup_parsed.value.object.get("attr").?.object.get("id").?.integer);
+
+    const invoke_lookup_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":2,\"op\":\"LOOKUP\",\"node\":{d},\"a\":{{\"name\":\"invoke.json\"}}}}",
+        .{control_id},
+    );
+    defer allocator.free(invoke_lookup_json);
+    var invoke_lookup_req = try fs_protocol.parseRequest(allocator, invoke_lookup_json);
+    defer invoke_lookup_req.deinit();
+    var invoke_lookup_result = node_ops.dispatch(invoke_lookup_req);
+    defer invoke_lookup_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, invoke_lookup_result.err_no);
+
+    var invoke_lookup_parsed = try std.json.parseFromSlice(std.json.Value, allocator, invoke_lookup_result.result_json.?, .{});
+    defer invoke_lookup_parsed.deinit();
+    const invoke_id: u64 = @intCast(invoke_lookup_parsed.value.object.get("attr").?.object.get("id").?.integer);
+
+    const open_invoke_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":3,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{invoke_id},
+    );
+    defer allocator.free(open_invoke_json);
+    var open_invoke_req = try fs_protocol.parseRequest(allocator, open_invoke_json);
+    defer open_invoke_req.deinit();
+    var open_invoke_result = node_ops.dispatch(open_invoke_req);
+    defer open_invoke_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_invoke_result.err_no);
+
+    var open_invoke_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_invoke_result.result_json.?, .{});
+    defer open_invoke_parsed.deinit();
+    const invoke_handle: u64 = @intCast(open_invoke_parsed.value.object.get("h").?.integer);
+
+    const write_invoke_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":4,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{invoke_handle},
+    );
+    defer allocator.free(write_invoke_json);
+    var write_invoke_req = try fs_protocol.parseRequest(allocator, write_invoke_json);
+    defer write_invoke_req.deinit();
+    var write_invoke_result = node_ops.dispatch(write_invoke_req);
+    defer write_invoke_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_invoke_result.err_no);
+
+    const status_node = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
+    const error_node = ns.nodes.get(error_id) orelse return error.TestExpectedResponse;
+    const metrics_node = ns.nodes.get(metrics_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, status_node.content, "\"state\":\"timeout\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, error_node.content, "timeout_ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metrics_node.content, "\"timeouts_total\":1") != null);
 }
 
 test "fs_node_ops: gdrive scaffold supports read path and guards writes" {

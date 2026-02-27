@@ -55,8 +55,8 @@ Projected files:
 Invocation is file-driven:
 
 - write a JSON object payload to `control/invoke.json`
-- runtime executes the configured process
-- payload bytes are sent to process `stdin`
+- runtime executes the configured driver runtime
+- payload bytes are sent to runtime `stdin` for `native_proc`/`wasm`
 
 Operational reset:
 
@@ -77,6 +77,15 @@ Result mapping:
   - `last_error.txt` = process `stderr` (or fallback error text)
   - `status.json.state` = `"error"`
   - `status.json.exit_code` populated
+
+Timeout behavior:
+
+- `runtime.timeout_ms` is enforced as a hard deadline for `native_proc` and
+  `wasm` (runner process is force-terminated when deadline is reached)
+- `status.json.state` becomes `"timeout"`
+- `timeouts_total` increments in `metrics.json`
+- `native_inproc` currently has no preemptive cancellation and falls back to
+  duration-based timeout accounting
 
 `metrics.json` tracks invocation counters and timing:
 
