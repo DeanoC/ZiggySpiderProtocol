@@ -266,7 +266,7 @@ fn appendFsService(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"rw\":{s},\"export_count\":{d}}},\"mounts\":[{{\"mount_id\":\"fs\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"fs_roots\":\"export-scoped\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin filesystem namespace driver\"}}",
+        "{{\"service_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"rw\":{s},\"export_count\":{d}}},\"mounts\":[{{\"mount_id\":\"fs\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"fs_roots\":\"export-scoped\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin filesystem namespace driver\"}}",
         .{
             endpoint,
             if (registry.fs_rw_export_count > 0) "true" else "false",
@@ -293,7 +293,7 @@ fn appendTerminalService(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\"}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin terminal namespace driver\"}}",
+        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\"}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin terminal namespace driver\"}}",
         .{ service_id, endpoint, escaped_terminal_id, service_id, endpoint },
     );
 }

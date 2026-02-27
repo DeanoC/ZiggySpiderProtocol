@@ -30,6 +30,8 @@ const namespace_chat_schema_json =
     "{\"name\":\"chat\",\"input\":\"control/input\",\"jobs\":\"/agents/self/jobs\",\"result\":\"result.txt\"}";
 const namespace_chat_meta_json =
     "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
+const namespace_service_schema_json =
+    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\"}";
 
 const max_read_bytes: u32 = 1024 * 1024;
 const max_write_bytes: usize = 1024 * 1024;
@@ -44,6 +46,7 @@ pub const ExportSpec = struct {
     gdrive_credential_handle: ?[]const u8 = null,
     native_watch: ?bool = null,
     case_sensitive: ?bool = null,
+    namespace_service: ?NamespaceServiceSpec = null,
 };
 
 const ExportConfig = struct {
@@ -58,6 +61,30 @@ const ExportConfig = struct {
     gdrive_credential_handle: ?[]u8,
     native_watch: bool,
     case_sensitive: bool,
+    namespace_service: ?NamespaceServiceConfig,
+};
+
+pub const NamespaceServiceSpec = struct {
+    service_id: []const u8,
+    executable_path: []const u8,
+    args: []const []const u8 = &.{},
+    help_md: ?[]const u8 = null,
+};
+
+const NamespaceServiceConfig = struct {
+    service_id: []u8,
+    executable_path: []u8,
+    args: std.ArrayListUnmanaged([]u8) = .{},
+    help_md: ?[]u8 = null,
+
+    fn deinit(self: *NamespaceServiceConfig, allocator: std.mem.Allocator) void {
+        allocator.free(self.service_id);
+        allocator.free(self.executable_path);
+        for (self.args.items) |arg| allocator.free(arg);
+        self.args.deinit(allocator);
+        if (self.help_md) |value| allocator.free(value);
+        self.* = undefined;
+    }
 };
 
 const GdriveOauthState = struct {
@@ -374,6 +401,7 @@ pub const NodeOps = struct {
             self.allocator.free(export_cfg.desc);
             self.allocator.free(export_cfg.source_id);
             if (export_cfg.gdrive_credential_handle) |handle| self.allocator.free(handle);
+            if (export_cfg.namespace_service) |*service| service.deinit(self.allocator);
         }
         self.exports.deinit(self.allocator);
         self.pending_events.deinit(self.allocator);
@@ -573,6 +601,22 @@ pub const NodeOps = struct {
         else
             null;
         errdefer if (gdrive_credential_handle) |handle| self.allocator.free(handle);
+        const namespace_service = if (source_kind == .namespace)
+            if (spec.namespace_service) |service_spec| blk: {
+                var owned = NamespaceServiceConfig{
+                    .service_id = try self.allocator.dupe(u8, service_spec.service_id),
+                    .executable_path = try self.allocator.dupe(u8, service_spec.executable_path),
+                    .help_md = if (service_spec.help_md) |value| try self.allocator.dupe(u8, value) else null,
+                };
+                errdefer owned.deinit(self.allocator);
+                for (service_spec.args) |arg| {
+                    try owned.args.append(self.allocator, try self.allocator.dupe(u8, arg));
+                }
+                break :blk owned;
+            } else null
+        else
+            null;
+        errdefer if (namespace_service) |*service| service.deinit(self.allocator);
         const native_watch = spec.native_watch orelse prepared.default_caps.native_watch;
         const case_sensitive = spec.case_sensitive orelse prepared.default_caps.case_sensitive;
         const export_ro = spec.ro;
@@ -589,6 +633,7 @@ pub const NodeOps = struct {
             .gdrive_credential_handle = gdrive_credential_handle,
             .native_watch = native_watch,
             .case_sensitive = case_sensitive,
+            .namespace_service = namespace_service,
         });
 
         try self.setNodePath(root_node_id, prepared.root_real_path);
@@ -667,6 +712,22 @@ pub const NodeOps = struct {
             _ = try self.namespaceCreateNode(export_index, &ns, examples_dir, "send.txt", .file, false, "hello from acheron chat");
             const control_dir = try self.namespaceCreateNode(export_index, &ns, chat_dir, "control", .dir, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "input", .file, true, "");
+        } else if (std.mem.startsWith(u8, export_cfg.source_id, "service:")) {
+            const service_help = if (export_cfg.namespace_service) |service|
+                if (service.help_md) |value|
+                    value
+                else
+                    "Namespace service driver.\nWrite JSON to control/invoke.json.\nRead result.json and status.json.\n"
+            else
+                "Namespace service driver.\nWrite JSON to control/invoke.json.\nRead result.json and status.json.\n";
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "README.md", .file, false, service_help);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "SCHEMA.json", .file, false, namespace_service_schema_json);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "result.json", .file, false, "{\"state\":\"idle\"}");
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "last_error.txt", .file, false, "");
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "status.json", .file, false, "{\"state\":\"idle\"}");
+            const control_dir = try self.namespaceCreateNode(export_index, &ns, root.id, "control", .dir, true, "");
+            _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "invoke.json", .file, true, "");
+            _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "reset", .file, true, "");
         }
 
         if (try self.namespace_exports.fetchPut(self.allocator, export_index, ns)) |existing| {
@@ -1114,6 +1175,12 @@ pub const NodeOps = struct {
             });
         }
 
+        self.maybeInvokeNamespaceServiceControl(handle.export_index, ns, node.id) catch |err| switch (err) {
+            error.AccessDenied => return DispatchResult.failure(fs_protocol.Errno.EPERM, "service invoke denied"),
+            error.InvalidPayload => return DispatchResult.failure(fs_protocol.Errno.EINVAL, "service invoke payload invalid"),
+            else => return DispatchResult.failure(fs_protocol.Errno.EIO, @errorName(err)),
+        };
+
         const response = std.fmt.allocPrint(self.allocator, "{{\"n\":{d}}}", .{decoded.len}) catch return DispatchResult.failure(fs_protocol.Errno.EIO, "out of memory");
         return DispatchResult.success(response);
     }
@@ -1314,6 +1381,151 @@ pub const NodeOps = struct {
         });
         const response = self.allocator.dupe(u8, "{}") catch return DispatchResult.failure(fs_protocol.Errno.EIO, "out of memory");
         return DispatchResult.success(response);
+    }
+
+    fn maybeInvokeNamespaceServiceControl(
+        self: *NodeOps,
+        export_index: usize,
+        ns: *NamespaceExport,
+        node_id: u64,
+    ) !void {
+        const export_cfg = self.exports.items[export_index];
+        const service_cfg = export_cfg.namespace_service orelse return;
+        const node = ns.nodes.get(node_id) orelse return;
+        const result_id = namespaceLookupChildNode(ns, ns.root_id, "result.json") orelse return error.FileNotFound;
+        const error_id = namespaceLookupChildNode(ns, ns.root_id, "last_error.txt") orelse return error.FileNotFound;
+        const status_id = namespaceLookupChildNode(ns, ns.root_id, "status.json") orelse return error.FileNotFound;
+        if (std.mem.eql(u8, node.path, "/control/reset")) {
+            try self.namespaceSetFileContent(ns, result_id, "{\"state\":\"idle\"}");
+            try self.namespaceSetFileContent(ns, error_id, "");
+            try self.namespaceSetFileContent(ns, status_id, "{\"state\":\"idle\"}");
+            return;
+        }
+        if (!std.mem.eql(u8, node.path, "/control/invoke.json")) return;
+
+        const payload = std.mem.trim(u8, node.content, " \t\r\n");
+        if (payload.len == 0) return;
+
+        var parsed_payload = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch return error.InvalidPayload;
+        defer parsed_payload.deinit();
+        if (parsed_payload.value != .object) return error.InvalidPayload;
+
+        var invoke_result = try self.executeNamespaceServiceProcess(&service_cfg, payload);
+        defer invoke_result.deinit(self.allocator);
+
+        if (invoke_result.success) {
+            const result_content = if (invoke_result.stdout.len > 0) invoke_result.stdout else "{}";
+            try self.namespaceSetFileContent(ns, result_id, result_content);
+            try self.namespaceSetFileContent(ns, error_id, "");
+            const status_json = try std.fmt.allocPrint(
+                self.allocator,
+                "{{\"state\":\"ok\",\"service_id\":\"{s}\",\"updated_ms\":{d},\"bytes\":{d}}}",
+                .{ service_cfg.service_id, std.time.milliTimestamp(), result_content.len },
+            );
+            defer self.allocator.free(status_json);
+            try self.namespaceSetFileContent(ns, status_id, status_json);
+            return;
+        }
+
+        const stderr_content = if (invoke_result.stderr.len > 0)
+            invoke_result.stderr
+        else
+            "service process failed";
+        try self.namespaceSetFileContent(ns, error_id, stderr_content);
+        const status_json = try std.fmt.allocPrint(
+            self.allocator,
+            "{{\"state\":\"error\",\"service_id\":\"{s}\",\"updated_ms\":{d},\"exit_code\":{d}}}",
+            .{ service_cfg.service_id, std.time.milliTimestamp(), invoke_result.exit_code },
+        );
+        defer self.allocator.free(status_json);
+        try self.namespaceSetFileContent(ns, status_id, status_json);
+    }
+
+    const ServiceProcessResult = struct {
+        stdout: []u8,
+        stderr: []u8,
+        exit_code: i32,
+        success: bool,
+
+        fn deinit(self: *ServiceProcessResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.stdout);
+            allocator.free(self.stderr);
+            self.* = undefined;
+        }
+    };
+
+    fn executeNamespaceServiceProcess(
+        self: *NodeOps,
+        service_cfg: *const NamespaceServiceConfig,
+        payload: []const u8,
+    ) !ServiceProcessResult {
+        var argv = std.ArrayListUnmanaged([]const u8){};
+        defer argv.deinit(self.allocator);
+        try argv.append(self.allocator, service_cfg.executable_path);
+        for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
+
+        var child = std.process.Child.init(argv.items, self.allocator);
+        child.stdin_behavior = .Pipe;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+
+        try child.spawn();
+        errdefer _ = child.kill() catch {};
+
+        if (child.stdin) |*stdin_pipe| {
+            try stdin_pipe.writeAll(payload);
+            stdin_pipe.close();
+            child.stdin = null;
+        }
+
+        var stdout = std.ArrayList(u8).empty;
+        defer stdout.deinit(self.allocator);
+        var stderr = std.ArrayList(u8).empty;
+        defer stderr.deinit(self.allocator);
+        try child.collectOutput(self.allocator, &stdout, &stderr, max_write_bytes);
+        const term = try child.wait();
+
+        return switch (term) {
+            .Exited => |code| .{
+                .stdout = try stdout.toOwnedSlice(self.allocator),
+                .stderr = try stderr.toOwnedSlice(self.allocator),
+                .exit_code = code,
+                .success = code == 0,
+            },
+            else => .{
+                .stdout = try stdout.toOwnedSlice(self.allocator),
+                .stderr = try stderr.toOwnedSlice(self.allocator),
+                .exit_code = -1,
+                .success = false,
+            },
+        };
+    }
+
+    fn namespaceLookupChildNode(ns: *const NamespaceExport, parent_id: u64, name: []const u8) ?u64 {
+        const parent = ns.nodes.get(parent_id) orelse return null;
+        if (parent.kind != .dir) return null;
+        return parent.children.get(name);
+    }
+
+    fn namespaceSetFileContent(
+        self: *NodeOps,
+        ns: *NamespaceExport,
+        node_id: u64,
+        content: []const u8,
+    ) !void {
+        const node = ns.nodes.getPtr(node_id) orelse return error.FileNotFound;
+        if (node.kind != .file) return error.InvalidArgument;
+        const next = try self.allocator.dupe(u8, content);
+        self.allocator.free(node.content);
+        node.content = next;
+        self.namespaceBumpGeneration(ns, node.id);
+        self.queueInvalidation(.{
+            .INVAL = .{
+                .node = node.id,
+                .what = .data,
+                .gen = node.generation,
+            },
+        });
     }
 
     fn gdriveStatusNodeId(self: *const NodeOps, export_index: usize) u64 {
@@ -4971,6 +5183,117 @@ test "fs_node_ops: namespace jobs export supports create write read" {
     const decoded = try decodeBase64(allocator, encoded);
     defer allocator.free(decoded);
     try std.testing.expectEqualStrings("hello", decoded);
+}
+
+test "fs_node_ops: namespace service reset control restores idle status files" {
+    const allocator = std.testing.allocator;
+    const service_export_name = "svc-echo-main";
+
+    var node_ops = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = service_export_name,
+            .path = "service:echo-main",
+            .source_kind = .namespace,
+            .source_id = "service:echo-main",
+            .ro = false,
+            .namespace_service = .{
+                .service_id = "echo-main",
+                .executable_path = "echo-driver",
+                .args = &.{},
+                .help_md = "Echo service",
+            },
+        },
+    });
+    defer node_ops.deinit();
+
+    const service_idx = node_ops.exportByName(service_export_name).?;
+    const root_id = node_ops.exports.items[service_idx].root_node_id;
+    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const error_id = ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
+    const result_id = ns.path_to_node.get("/result.json") orelse return error.TestExpectedResponse;
+    {
+        const status_node = ns.nodes.getPtr(status_id) orelse return error.TestExpectedResponse;
+        allocator.free(status_node.content);
+        status_node.content = try allocator.dupe(u8, "{\"state\":\"error\"}");
+    }
+    {
+        const error_node = ns.nodes.getPtr(error_id) orelse return error.TestExpectedResponse;
+        allocator.free(error_node.content);
+        error_node.content = try allocator.dupe(u8, "boom");
+    }
+    {
+        const result_node = ns.nodes.getPtr(result_id) orelse return error.TestExpectedResponse;
+        allocator.free(result_node.content);
+        result_node.content = try allocator.dupe(u8, "{\"ok\":false}");
+    }
+
+    const control_lookup_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":1,\"op\":\"LOOKUP\",\"node\":{d},\"a\":{{\"name\":\"control\"}}}}",
+        .{root_id},
+    );
+    defer allocator.free(control_lookup_json);
+    var control_lookup_req = try fs_protocol.parseRequest(allocator, control_lookup_json);
+    defer control_lookup_req.deinit();
+    var control_lookup_result = node_ops.dispatch(control_lookup_req);
+    defer control_lookup_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, control_lookup_result.err_no);
+
+    var control_lookup_parsed = try std.json.parseFromSlice(std.json.Value, allocator, control_lookup_result.result_json.?, .{});
+    defer control_lookup_parsed.deinit();
+    const control_id: u64 = @intCast(control_lookup_parsed.value.object.get("attr").?.object.get("id").?.integer);
+
+    const reset_lookup_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":2,\"op\":\"LOOKUP\",\"node\":{d},\"a\":{{\"name\":\"reset\"}}}}",
+        .{control_id},
+    );
+    defer allocator.free(reset_lookup_json);
+    var reset_lookup_req = try fs_protocol.parseRequest(allocator, reset_lookup_json);
+    defer reset_lookup_req.deinit();
+    var reset_lookup_result = node_ops.dispatch(reset_lookup_req);
+    defer reset_lookup_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, reset_lookup_result.err_no);
+
+    var reset_lookup_parsed = try std.json.parseFromSlice(std.json.Value, allocator, reset_lookup_result.result_json.?, .{});
+    defer reset_lookup_parsed.deinit();
+    const reset_id: u64 = @intCast(reset_lookup_parsed.value.object.get("attr").?.object.get("id").?.integer);
+
+    const open_reset_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":3,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{reset_id},
+    );
+    defer allocator.free(open_reset_json);
+    var open_reset_req = try fs_protocol.parseRequest(allocator, open_reset_json);
+    defer open_reset_req.deinit();
+    var open_reset_result = node_ops.dispatch(open_reset_req);
+    defer open_reset_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_reset_result.err_no);
+
+    var open_reset_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_reset_result.result_json.?, .{});
+    defer open_reset_parsed.deinit();
+    const reset_handle: u64 = @intCast(open_reset_parsed.value.object.get("h").?.integer);
+
+    const write_reset_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":4,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{reset_handle},
+    );
+    defer allocator.free(write_reset_json);
+    var write_reset_req = try fs_protocol.parseRequest(allocator, write_reset_json);
+    defer write_reset_req.deinit();
+    var write_reset_result = node_ops.dispatch(write_reset_req);
+    defer write_reset_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_reset_result.err_no);
+
+    const status_node_after = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
+    const error_node_after = ns.nodes.get(error_id) orelse return error.TestExpectedResponse;
+    const result_node_after = ns.nodes.get(result_id) orelse return error.TestExpectedResponse;
+    try std.testing.expectEqualStrings("{\"state\":\"idle\"}", status_node_after.content);
+    try std.testing.expectEqualStrings("", error_node_after.content);
+    try std.testing.expectEqualStrings("{\"state\":\"idle\"}", result_node_after.content);
 }
 
 test "fs_node_ops: gdrive scaffold supports read path and guards writes" {

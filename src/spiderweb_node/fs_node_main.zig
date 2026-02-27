@@ -237,6 +237,47 @@ const LeaseRefreshContext = struct {
     }
 };
 
+const NamespaceServiceExportSpecOwned = struct {
+    name: []u8,
+    path: []u8,
+    source_id: []u8,
+    desc: []u8,
+    service_id: []u8,
+    executable_path: []u8,
+    args: std.ArrayListUnmanaged([]u8) = .{},
+    help_md: ?[]u8 = null,
+
+    fn deinit(self: *NamespaceServiceExportSpecOwned, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.path);
+        allocator.free(self.source_id);
+        allocator.free(self.desc);
+        allocator.free(self.service_id);
+        allocator.free(self.executable_path);
+        for (self.args.items) |arg| allocator.free(arg);
+        self.args.deinit(allocator);
+        if (self.help_md) |value| allocator.free(value);
+        self.* = undefined;
+    }
+
+    fn asExportSpec(self: *const NamespaceServiceExportSpecOwned) fs_node_ops.ExportSpec {
+        return .{
+            .name = self.name,
+            .path = self.path,
+            .ro = false,
+            .desc = self.desc,
+            .source_kind = .namespace,
+            .source_id = self.source_id,
+            .namespace_service = .{
+                .service_id = self.service_id,
+                .executable_path = self.executable_path,
+                .args = self.args.items,
+                .help_md = self.help_md,
+            },
+        };
+    }
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -273,6 +314,13 @@ pub fn main() !void {
     defer service_manifest_paths.deinit(allocator);
     var services_dirs = std.ArrayListUnmanaged([]const u8){};
     defer services_dirs.deinit(allocator);
+    var runtime_namespace_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &runtime_namespace_exports);
+        runtime_namespace_exports.deinit(allocator);
+    }
+    var effective_exports = std.ArrayListUnmanaged(fs_node_ops.ExportSpec){};
+    defer effective_exports.deinit(allocator);
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -459,13 +507,23 @@ pub fn main() !void {
                 }
 
                 service_registry.clearExtraServices();
+                deinitNamespaceServiceExportList(allocator, &runtime_namespace_exports);
                 try loadConfiguredManifestServices(
                     allocator,
                     state.node_id.?,
                     service_manifest_paths.items,
                     services_dirs.items,
                     &service_registry,
+                    &runtime_namespace_exports,
                 );
+                try rebuildEffectiveExportSpecs(
+                    allocator,
+                    exports.items,
+                    runtime_namespace_exports.items,
+                    &effective_exports,
+                );
+                service_registry.fs_export_count = effective_exports.items.len;
+                service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
 
                 upsertNodeServiceCatalog(
                     allocator,
@@ -537,10 +595,10 @@ pub fn main() !void {
             std.log.info("Starting spiderweb-fs-node control tunnel", .{});
             std.log.info("Control pairing enabled via {s} ({s})", .{ control_url_value, @tagName(pair_mode) });
             std.log.info("Advertised routed FS URL: {s}", .{routed_fs_url});
-            if (exports.items.len == 0) {
+            if (effective_exports.items.len == 0) {
                 std.log.info("No exports configured via CLI; using default export name='work' path='.' rw", .{});
             } else {
-                for (exports.items) |spec| {
+                for (effective_exports.items) |spec| {
                     std.log.info("Export {s} => {s} ({s})", .{ spec.name, spec.path, if (spec.ro) "ro" else "rw" });
                 }
             }
@@ -551,7 +609,7 @@ pub fn main() !void {
                     .url = control_url_value,
                     .auth_token = control_auth_token,
                 },
-                exports.items,
+                effective_exports.items,
                 state_path,
                 reconnect_backoff_ms,
                 reconnect_backoff_max_ms,
@@ -583,27 +641,37 @@ pub fn main() !void {
     }
 
     service_registry.clearExtraServices();
+    deinitNamespaceServiceExportList(allocator, &runtime_namespace_exports);
     try loadConfiguredManifestServices(
         allocator,
         node_name,
         service_manifest_paths.items,
         services_dirs.items,
         &service_registry,
+        &runtime_namespace_exports,
     );
+    try rebuildEffectiveExportSpecs(
+        allocator,
+        exports.items,
+        runtime_namespace_exports.items,
+        &effective_exports,
+    );
+    service_registry.fs_export_count = effective_exports.items.len;
+    service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
 
     std.log.info("Starting spiderweb-fs-node on {s}:{d}", .{ bind_addr, port });
     if (auth_token != null) {
         std.log.info("FS node session auth enabled", .{});
     }
-    if (exports.items.len == 0) {
+    if (effective_exports.items.len == 0) {
         std.log.info("No exports configured via CLI; using default export name='work' path='.' rw", .{});
     } else {
-        for (exports.items) |spec| {
+        for (effective_exports.items) |spec| {
             std.log.info("Export {s} => {s} ({s})", .{ spec.name, spec.path, if (spec.ro) "ro" else "rw" });
         }
     }
 
-    try fs_node_server.run(allocator, bind_addr, port, exports.items, auth_token);
+    try fs_node_server.run(allocator, bind_addr, port, effective_exports.items, auth_token);
 }
 
 fn parsePairMode(raw: []const u8) ?PairMode {
@@ -621,12 +689,21 @@ fn parseLabelArg(raw: []const u8) !node_capability_providers.NodeLabelArg {
     };
 }
 
+fn countRwExportSpecs(specs: []const fs_node_ops.ExportSpec) usize {
+    var rw: usize = 0;
+    for (specs) |spec| {
+        if (!spec.ro) rw += 1;
+    }
+    return rw;
+}
+
 fn loadConfiguredManifestServices(
     allocator: std.mem.Allocator,
     node_id: []const u8,
     manifest_paths: []const []const u8,
     service_dirs: []const []const u8,
     registry: *node_capability_providers.Registry,
+    runtime_namespace_exports: *std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned),
 ) !void {
     var loaded = std.ArrayListUnmanaged(service_manifest.LoadedService){};
     defer {
@@ -667,12 +744,98 @@ fn loadConfiguredManifestServices(
     for (loaded.items) |item| {
         try validateServiceRuntimeConfig(allocator, item.service_json);
         try runtime_manager.registerFromServiceJson(item.service_json);
+        if (try buildNamespaceServiceExportFromServiceJson(allocator, item.service_json)) |service_export| {
+            try runtime_namespace_exports.append(allocator, service_export);
+        }
         try registry.addExtraService(item.service_id, item.service_json);
         std.log.info("Loaded service manifest: {s}", .{item.service_id});
     }
 
     try runtime_manager.startAll();
     runtime_manager.stopAll();
+}
+
+fn buildNamespaceServiceExportFromServiceJson(
+    allocator: std.mem.Allocator,
+    service_json: []const u8,
+) !?NamespaceServiceExportSpecOwned {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, service_json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidArguments;
+
+    const obj = parsed.value.object;
+    const service_id = if (obj.get("service_id")) |value|
+        if (value == .string and value.string.len > 0) value.string else return error.InvalidArguments
+    else
+        return error.InvalidArguments;
+    const runtime = obj.get("runtime") orelse return null;
+    if (runtime != .object) return null;
+    const runtime_type = if (runtime.object.get("type")) |value|
+        if (value == .string and value.string.len > 0) value.string else return error.InvalidArguments
+    else
+        "builtin";
+    if (!std.mem.eql(u8, runtime_type, "native_proc")) return null;
+
+    const executable_path = if (runtime.object.get("executable_path")) |value|
+        if (value == .string and value.string.len > 0) value.string else return error.InvalidArguments
+    else
+        return null;
+
+    var owned = NamespaceServiceExportSpecOwned{
+        .name = try std.fmt.allocPrint(allocator, "svc-{s}", .{service_id}),
+        .path = try std.fmt.allocPrint(allocator, "service:{s}", .{service_id}),
+        .source_id = try std.fmt.allocPrint(allocator, "service:{s}", .{service_id}),
+        .desc = try std.fmt.allocPrint(allocator, "namespace service {s}", .{service_id}),
+        .service_id = try allocator.dupe(u8, service_id),
+        .executable_path = try allocator.dupe(u8, executable_path),
+        .help_md = if (obj.get("help_md")) |value|
+            if (value == .string and value.string.len > 0) try allocator.dupe(u8, value.string) else null
+        else
+            null,
+    };
+    errdefer owned.deinit(allocator);
+
+    if (runtime.object.get("args")) |raw_args| {
+        if (raw_args != .array) return error.InvalidArguments;
+        for (raw_args.array.items) |item| {
+            if (item != .string or item.string.len == 0) return error.InvalidArguments;
+            try owned.args.append(allocator, try allocator.dupe(u8, item.string));
+        }
+    }
+
+    return owned;
+}
+
+fn deinitNamespaceServiceExportList(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned),
+) void {
+    for (list.items) |*item| item.deinit(allocator);
+    list.clearRetainingCapacity();
+}
+
+fn rebuildEffectiveExportSpecs(
+    allocator: std.mem.Allocator,
+    base_exports: []const fs_node_ops.ExportSpec,
+    runtime_namespace_exports: []const NamespaceServiceExportSpecOwned,
+    out: *std.ArrayListUnmanaged(fs_node_ops.ExportSpec),
+) !void {
+    out.clearRetainingCapacity();
+    for (base_exports) |spec| try out.append(allocator, spec);
+
+    var names = std.StringHashMapUnmanaged(void){};
+    defer names.deinit(allocator);
+    for (out.items) |spec| {
+        if (names.contains(spec.name)) return error.InvalidArguments;
+        try names.put(allocator, spec.name, {});
+    }
+
+    for (runtime_namespace_exports) |*owned_spec| {
+        const candidate = owned_spec.asExportSpec();
+        if (names.contains(candidate.name)) return error.InvalidArguments;
+        try names.put(allocator, candidate.name, {});
+        try out.append(allocator, candidate);
+    }
 }
 
 fn validateServiceRuntimeConfig(
@@ -2035,6 +2198,11 @@ test "fs_node_main: loads extra services from manifest file" {
         .enable_fs_service = false,
     });
     defer registry.deinit();
+    var runtime_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &runtime_exports);
+        runtime_exports.deinit(allocator);
+    }
 
     try loadConfiguredManifestServices(
         allocator,
@@ -2042,6 +2210,7 @@ test "fs_node_main: loads extra services from manifest file" {
         &.{manifest_path},
         &.{},
         &registry,
+        &runtime_exports,
     );
 
     const payload = try registry.buildServiceUpsertPayload(
@@ -2067,6 +2236,28 @@ test "fs_node_main: runtime validator accepts declarative runtime metadata" {
         allocator,
         "{\"service_id\":\"pdf-wasm\",\"kind\":\"converter\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/convert\"],\"runtime\":{\"type\":\"wasm\"}}",
     );
+}
+
+test "fs_node_main: native_proc namespace export is built only when executable path is provided" {
+    const allocator = std.testing.allocator;
+
+    const missing_path = try buildNamespaceServiceExportFromServiceJson(
+        allocator,
+        "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_proc\"}}",
+    );
+    try std.testing.expect(missing_path == null);
+
+    const with_path = try buildNamespaceServiceExportFromServiceJson(
+        allocator,
+        "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_proc\",\"executable_path\":\"./camera-driver\",\"args\":[\"--mode\",\"still\"]}}",
+    );
+    try std.testing.expect(with_path != null);
+    var export_spec = with_path.?;
+    defer export_spec.deinit(allocator);
+    try std.testing.expectEqualStrings("svc-camera-main", export_spec.name);
+    try std.testing.expectEqualStrings("service:camera-main", export_spec.path);
+    try std.testing.expectEqualStrings("./camera-driver", export_spec.executable_path);
+    try std.testing.expectEqual(@as(usize, 2), export_spec.args.items.len);
 }
 
 test "fs_node_main: runtime validator rejects unknown runtime type" {
