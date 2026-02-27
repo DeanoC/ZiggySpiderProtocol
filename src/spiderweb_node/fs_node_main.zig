@@ -21,6 +21,7 @@ const default_control_backoff_max_ms: u64 = 60_000;
 const default_lease_ttl_ms: u64 = 15 * 60 * 1000;
 const default_lease_refresh_interval_ms: u64 = 60 * 1000;
 const default_manifest_reload_interval_ms: u64 = 2_000;
+const default_runtime_probe_catalog_sync_interval_ms: u64 = 1_000;
 const control_reply_timeout_ms: i32 = 45_000;
 const fsrpc_node_protocol_version = "unified-v2-fs";
 const fsrpc_node_proto_id: i64 = 2;
@@ -2054,6 +2055,118 @@ fn syncServiceRuntimeManagerFromRegistry(
     try runtime_manager.startAll();
 }
 
+fn applyRuntimeManagerStateToServiceRegistry(
+    allocator: std.mem.Allocator,
+    service_registry: *node_capability_providers.Registry,
+    runtime_manager: *service_runtime_manager.RuntimeManager,
+) !bool {
+    var changed = false;
+    for (service_registry.extra_services.items) |*entry| {
+        const state = runtime_manager.serviceState(entry.service_id) orelse continue;
+        const stats = runtime_manager.serviceRuntimeStats(entry.service_id) orelse continue;
+        const next_json = try renderServiceJsonWithRuntimeProbeState(
+            allocator,
+            entry.service_json,
+            state,
+            stats,
+        );
+        if (std.mem.eql(u8, next_json, entry.service_json)) {
+            allocator.free(next_json);
+            continue;
+        }
+        allocator.free(entry.service_json);
+        entry.service_json = next_json;
+        changed = true;
+    }
+    return changed;
+}
+
+fn renderServiceJsonWithRuntimeProbeState(
+    allocator: std.mem.Allocator,
+    service_json: []const u8,
+    state: namespace_driver.ServiceState,
+    stats: service_runtime_manager.ServiceRuntimeStats,
+) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const temp_allocator = arena.allocator();
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, temp_allocator, service_json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return allocator.dupe(u8, service_json);
+
+    const state_name = serviceStateJsonName(state);
+    const root = &parsed.value.object;
+    try jsonObjectPutString(root, "state", state_name);
+
+    if (root.getPtr("mounts")) |mounts| {
+        if (mounts.* == .array) {
+            for (mounts.array.items) |*item| {
+                if (item.* != .object) continue;
+                try jsonObjectPutString(&item.object, "state", state_name);
+            }
+        }
+    }
+
+    const runtime_obj = try ensureJsonObjectField(temp_allocator, root, "runtime");
+    var supervision_status = std.json.ObjectMap.init(temp_allocator);
+    try jsonObjectPutString(&supervision_status, "state", state_name);
+    try jsonObjectPutBool(&supervision_status, "enabled", stats.enabled);
+    try jsonObjectPutBool(&supervision_status, "running", stats.running);
+    try jsonObjectPutI64(&supervision_status, "start_attempts_total", clampU64ToI64(stats.start_attempts_total));
+    try jsonObjectPutI64(&supervision_status, "restarts_total", clampU64ToI64(stats.restarts_total));
+    try jsonObjectPutI64(&supervision_status, "consecutive_failures", stats.consecutive_failures);
+    try jsonObjectPutI64(&supervision_status, "backoff_until_ms", stats.backoff_until_ms);
+    try jsonObjectPutI64(&supervision_status, "updated_at_ms", std.time.milliTimestamp());
+    try jsonObjectPutValue(runtime_obj, "supervision_status", .{ .object = supervision_status });
+
+    const rendered = try std.json.Stringify.valueAlloc(temp_allocator, parsed.value, .{});
+    return allocator.dupe(u8, rendered);
+}
+
+fn serviceStateJsonName(state: namespace_driver.ServiceState) []const u8 {
+    return switch (state) {
+        .online => "online",
+        .degraded => "degraded",
+        .offline => "offline",
+    };
+}
+
+fn clampU64ToI64(value: u64) i64 {
+    if (value > std.math.maxInt(i64)) return std.math.maxInt(i64);
+    return @intCast(value);
+}
+
+fn jsonObjectPutValue(obj: *std.json.ObjectMap, key: []const u8, value: std.json.Value) !void {
+    const gop = try obj.getOrPut(key);
+    gop.value_ptr.* = value;
+}
+
+fn jsonObjectPutString(obj: *std.json.ObjectMap, key: []const u8, value: []const u8) !void {
+    try jsonObjectPutValue(obj, key, .{ .string = value });
+}
+
+fn jsonObjectPutBool(obj: *std.json.ObjectMap, key: []const u8, value: bool) !void {
+    try jsonObjectPutValue(obj, key, .{ .bool = value });
+}
+
+fn jsonObjectPutI64(obj: *std.json.ObjectMap, key: []const u8, value: anytype) !void {
+    const typed: i64 = @intCast(value);
+    try jsonObjectPutValue(obj, key, .{ .integer = typed });
+}
+
+fn ensureJsonObjectField(
+    allocator: std.mem.Allocator,
+    obj: *std.json.ObjectMap,
+    key: []const u8,
+) !*std.json.ObjectMap {
+    const gop = try obj.getOrPut(key);
+    if (!gop.found_existing or gop.value_ptr.* != .object) {
+        gop.value_ptr.* = .{ .object = std.json.ObjectMap.init(allocator) };
+    }
+    return &gop.value_ptr.object;
+}
+
 fn runControlRoutedNodeService(
     allocator: std.mem.Allocator,
     connect: ControlConnectOptions,
@@ -2092,7 +2205,9 @@ fn runControlRoutedNodeService(
         default_manifest_reload_interval_ms
     else
         manifest_reload_interval_ms;
+    const probe_sync_interval_ms: i64 = @intCast(default_runtime_probe_catalog_sync_interval_ms);
     var next_manifest_reload_ms = std.time.milliTimestamp() + @as(i64, @intCast(reload_interval_ms));
+    var next_probe_sync_ms = std.time.milliTimestamp() + probe_sync_interval_ms;
 
     var attempts: u32 = 0;
     while (true) {
@@ -2177,6 +2292,7 @@ fn runControlRoutedNodeService(
         attempts = 0;
         std.log.info("control tunnel established for node {s}", .{node_id});
         next_manifest_reload_ms = std.time.milliTimestamp() + @as(i64, @intCast(reload_interval_ms));
+        next_probe_sync_ms = std.time.milliTimestamp() + probe_sync_interval_ms;
 
         while (true) {
             const now_ms = std.time.milliTimestamp();
@@ -2201,6 +2317,17 @@ fn runControlRoutedNodeService(
                     false;
                 };
                 if (changed) {
+                    _ = applyRuntimeManagerStateToServiceRegistry(
+                        allocator,
+                        service_registry,
+                        &runtime_manager,
+                    ) catch |sync_err| {
+                        std.log.warn("control tunnel: runtime state overlay failed after reload: {s}", .{@errorName(sync_err)});
+                        false;
+                    };
+                    shared_service_registry.replaceFrom(service_registry) catch |replace_err| {
+                        std.log.warn("control tunnel: shared service registry replace failed after reload: {s}", .{@errorName(replace_err)});
+                    };
                     upsertNodeServiceCatalog(
                         allocator,
                         connect,
@@ -2213,6 +2340,32 @@ fn runControlRoutedNodeService(
                     std.log.info("control tunnel: applied manifest hot-reload for node {s}", .{node_id});
                 }
                 next_manifest_reload_ms = now_ms + @as(i64, @intCast(reload_interval_ms));
+            }
+
+            if (now_ms >= next_probe_sync_ms) {
+                const probe_changed = applyRuntimeManagerStateToServiceRegistry(
+                    allocator,
+                    service_registry,
+                    &runtime_manager,
+                ) catch |sync_err| blk: {
+                    std.log.warn("control tunnel: runtime probe state sync failed: {s}", .{@errorName(sync_err)});
+                    break :blk false;
+                };
+                if (probe_changed) {
+                    shared_service_registry.replaceFrom(service_registry) catch |replace_err| {
+                        std.log.warn("control tunnel: shared service registry replace failed: {s}", .{@errorName(replace_err)});
+                    };
+                    upsertNodeServiceCatalog(
+                        allocator,
+                        connect,
+                        service_registry,
+                        &state,
+                    ) catch |upsert_err| switch (upsert_err) {
+                        error.ControlNodeIdentityRejected => return error.ControlNodeIdentityRejected,
+                        else => std.log.warn("control tunnel: runtime probe catalog upsert failed: {s}", .{@errorName(upsert_err)}),
+                    };
+                }
+                next_probe_sync_ms = now_ms + probe_sync_interval_ms;
             }
 
             const readable = waitReadable(&stream, 250) catch |wait_err| {
@@ -3428,4 +3581,70 @@ test "fs_node_main: syncServiceRuntimeManagerFromRegistry probes runtime drivers
     }
 
     try std.testing.expect(degraded);
+}
+
+test "fs_node_main: runtime probe state overlays service catalog json" {
+    const allocator = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const root = try temp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+
+    const executable_path = try std.fmt.allocPrint(allocator, "{s}/probe-driver", .{root});
+    defer allocator.free(executable_path);
+    try temp.dir.writeFile(.{
+        .sub_path = "probe-driver",
+        .data = "#!/bin/sh\necho ok\n",
+    });
+
+    var registry = try node_capability_providers.Registry.init(allocator, .{
+        .enable_fs_service = false,
+    });
+    defer registry.deinit();
+
+    const escaped_exec = try jsonEscape(allocator, executable_path);
+    defer allocator.free(escaped_exec);
+    const service_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"service_id\":\"svc-runtime-overlay\",\"kind\":\"tooling\",\"version\":\"1\",\"state\":\"offline\",\"endpoints\":[\"/nodes/node-1/services/svc-runtime-overlay\"],\"mounts\":[{{\"mount_id\":\"svc-runtime-overlay\",\"mount_path\":\"/nodes/node-1/services/svc-runtime-overlay\",\"state\":\"offline\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"namespace-driver-v1\",\"executable_path\":\"{s}\",\"supervision\":{{\"health_check_interval_ms\":10,\"restart_backoff_ms\":5,\"restart_backoff_max_ms\":20}}}},\"permissions\":{{\"default\":\"deny-by-default\"}},\"schema\":{{\"model\":\"namespace-mount\"}}}}",
+        .{escaped_exec},
+    );
+    defer allocator.free(service_json);
+    try registry.addExtraService("svc-runtime-overlay", service_json);
+
+    var runtime_probe_store = RuntimeProbeDriverStore.init(allocator);
+    defer runtime_probe_store.deinit();
+    var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
+    defer runtime_manager.deinit();
+    try syncServiceRuntimeManagerFromRegistry(
+        allocator,
+        &registry,
+        &runtime_manager,
+        &runtime_probe_store,
+    );
+
+    const first_overlay = try applyRuntimeManagerStateToServiceRegistry(
+        allocator,
+        &registry,
+        &runtime_manager,
+    );
+    try std.testing.expect(first_overlay);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"supervision_status\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"state\":\"online\"") != null);
+
+    try temp.dir.deleteFile("probe-driver");
+    const deadline = std.time.milliTimestamp() + 2_000;
+    while (std.time.milliTimestamp() < deadline) {
+        const state = runtime_manager.serviceState("svc-runtime-overlay") orelse return error.TestExpectedResponse;
+        if (state != .online) break;
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+
+    const degraded_overlay = try applyRuntimeManagerStateToServiceRegistry(
+        allocator,
+        &registry,
+        &runtime_manager,
+    );
+    try std.testing.expect(degraded_overlay);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"state\":\"degraded\"") != null);
 }
