@@ -20,6 +20,16 @@ pub const ServiceRuntimeStats = struct {
     backoff_until_ms: i64,
 };
 
+pub const ParsedServiceRegistration = struct {
+    descriptor: namespace_driver.ServiceDescriptor,
+    policy: ServiceSupervisionPolicy,
+
+    pub fn deinit(self: *ParsedServiceRegistration, allocator: std.mem.Allocator) void {
+        self.descriptor.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
 pub const RuntimeManager = struct {
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
@@ -209,10 +219,9 @@ pub const RuntimeManager = struct {
     }
 
     pub fn registerFromServiceJson(self: *RuntimeManager, service_json: []const u8) !void {
-        var descriptor = try parseServiceDescriptor(self.allocator, service_json);
-        defer descriptor.deinit(self.allocator);
-        const policy = try parseServiceSupervisionPolicy(self.allocator, service_json);
-        try self.registerWithPolicy(&descriptor, null, policy);
+        var parsed = try parseServiceRegistrationFromServiceJson(self.allocator, service_json);
+        defer parsed.deinit(self.allocator);
+        try self.registerWithPolicy(&parsed.descriptor, null, parsed.policy);
     }
 
     fn findServiceIndexLocked(self: *RuntimeManager, service_id: []const u8) ?usize {
@@ -353,6 +362,16 @@ pub const RuntimeManager = struct {
         }
     }
 };
+
+pub fn parseServiceRegistrationFromServiceJson(
+    allocator: std.mem.Allocator,
+    service_json: []const u8,
+) !ParsedServiceRegistration {
+    return .{
+        .descriptor = try parseServiceDescriptor(allocator, service_json),
+        .policy = try parseServiceSupervisionPolicy(allocator, service_json),
+    };
+}
 
 fn normalizePolicy(policy: *ServiceSupervisionPolicy) void {
     if (policy.health_check_interval_ms == 0) policy.health_check_interval_ms = 5_000;

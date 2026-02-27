@@ -11,6 +11,7 @@ const plugin_loader_wasm = @import("plugin_loader_wasm.zig");
 const wasm_host_adapter = @import("wasm_host_adapter.zig");
 const service_manifest = @import("service_manifest.zig");
 const service_runtime_manager = @import("service_runtime_manager.zig");
+const namespace_driver = @import("namespace_driver.zig");
 const unified = @import("ziggy-spider-protocol").unified;
 
 const default_state_path = ".spiderweb-fs-node-state.json";
@@ -328,6 +329,352 @@ const NamespaceServiceExportSpecOwned = struct {
         };
     }
 };
+
+const RuntimeProbeDriverCtx = struct {
+    mutex: std.Thread.Mutex = .{},
+    service_id: []u8,
+    runtime_type: namespace_driver.RuntimeType,
+    executable_path: ?[]u8 = null,
+    library_path: ?[]u8 = null,
+    module_path: ?[]u8 = null,
+    runner_path: ?[]u8 = null,
+    entrypoint: ?[]u8 = null,
+    invoke_symbol: ?[]u8 = null,
+    in_process: bool = true,
+    args: std.ArrayListUnmanaged([]u8) = .{},
+    running: bool = false,
+
+    fn deinit(self: *RuntimeProbeDriverCtx, allocator: std.mem.Allocator) void {
+        allocator.free(self.service_id);
+        if (self.executable_path) |value| allocator.free(value);
+        if (self.library_path) |value| allocator.free(value);
+        if (self.module_path) |value| allocator.free(value);
+        if (self.runner_path) |value| allocator.free(value);
+        if (self.entrypoint) |value| allocator.free(value);
+        if (self.invoke_symbol) |value| allocator.free(value);
+        for (self.args.items) |arg| allocator.free(arg);
+        self.args.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+const runtime_probe_driver_vtable = namespace_driver.DriverVTable{
+    .start = runtimeProbeDriverStart,
+    .stop = runtimeProbeDriverStop,
+    .health = runtimeProbeDriverHealth,
+    .invoke_json = runtimeProbeDriverInvokeJson,
+};
+
+const RuntimeProbeDriverStore = struct {
+    allocator: std.mem.Allocator,
+    contexts: std.ArrayListUnmanaged(*RuntimeProbeDriverCtx) = .{},
+
+    fn init(allocator: std.mem.Allocator) RuntimeProbeDriverStore {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *RuntimeProbeDriverStore) void {
+        self.clear();
+        self.contexts.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    fn clear(self: *RuntimeProbeDriverStore) void {
+        for (self.contexts.items) |ctx| {
+            ctx.deinit(self.allocator);
+            self.allocator.destroy(ctx);
+        }
+        self.contexts.clearRetainingCapacity();
+    }
+
+    fn driverFromServiceJson(
+        self: *RuntimeProbeDriverStore,
+        descriptor: *const namespace_driver.ServiceDescriptor,
+        service_json: []const u8,
+    ) !?namespace_driver.DriverHandle {
+        const maybe_ctx = try runtimeProbeDriverContextFromServiceJson(
+            self.allocator,
+            descriptor,
+            service_json,
+        );
+        const ctx = maybe_ctx orelse return null;
+        errdefer {
+            ctx.deinit(self.allocator);
+            self.allocator.destroy(ctx);
+        }
+        try self.contexts.append(self.allocator, ctx);
+        return .{
+            .ctx = ctx,
+            .vtable = &runtime_probe_driver_vtable,
+        };
+    }
+};
+
+fn runtimeProbeDriverContextFromServiceJson(
+    allocator: std.mem.Allocator,
+    descriptor: *const namespace_driver.ServiceDescriptor,
+    service_json: []const u8,
+) !?*RuntimeProbeDriverCtx {
+    if (descriptor.runtime_type == .builtin) return null;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, service_json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidArguments;
+
+    const runtime = parsed.value.object.get("runtime") orelse return null;
+    if (runtime != .object) return error.InvalidArguments;
+
+    var ctx = try allocator.create(RuntimeProbeDriverCtx);
+    ctx.* = .{
+        .service_id = try allocator.dupe(u8, descriptor.service_id),
+        .runtime_type = descriptor.runtime_type,
+    };
+    errdefer {
+        ctx.deinit(allocator);
+        allocator.destroy(ctx);
+    }
+
+    switch (descriptor.runtime_type) {
+        .builtin => return null,
+        .native_proc => {
+            const executable_path = runtime.object.get("executable_path") orelse return null;
+            if (executable_path != .string or executable_path.string.len == 0) return error.InvalidArguments;
+            ctx.executable_path = try allocator.dupe(u8, executable_path.string);
+            try runtimeProbeParseRuntimeArgs(allocator, runtime.object, &ctx.args);
+        },
+        .native_inproc => {
+            const library_path = runtime.object.get("library_path") orelse return null;
+            if (library_path != .string or library_path.string.len == 0) return error.InvalidArguments;
+            ctx.library_path = try allocator.dupe(u8, library_path.string);
+            if (runtime.object.get("in_process")) |in_process| {
+                if (in_process != .bool) return error.InvalidArguments;
+                ctx.in_process = in_process.bool;
+            }
+            if (runtime.object.get("invoke_symbol")) |invoke_symbol| {
+                if (invoke_symbol != .string or invoke_symbol.string.len == 0) return error.InvalidArguments;
+                ctx.invoke_symbol = try allocator.dupe(u8, invoke_symbol.string);
+            } else {
+                ctx.invoke_symbol = try allocator.dupe(u8, plugin_loader_native.default_invoke_symbol);
+            }
+            try runtimeProbeParseRuntimeArgs(allocator, runtime.object, &ctx.args);
+        },
+        .wasm => {
+            const module_path = runtime.object.get("module_path") orelse return null;
+            if (module_path != .string or module_path.string.len == 0) return error.InvalidArguments;
+            ctx.module_path = try allocator.dupe(u8, module_path.string);
+            if (runtime.object.get("runner_path")) |runner_path| {
+                if (runner_path != .string or runner_path.string.len == 0) return error.InvalidArguments;
+                ctx.runner_path = try allocator.dupe(u8, runner_path.string);
+            }
+            if (runtime.object.get("entrypoint")) |entrypoint| {
+                if (entrypoint != .string or entrypoint.string.len == 0) return error.InvalidArguments;
+                ctx.entrypoint = try allocator.dupe(u8, entrypoint.string);
+            } else {
+                ctx.entrypoint = try allocator.dupe(u8, "spiderweb_driver_v1");
+            }
+            try runtimeProbeParseRuntimeArgs(allocator, runtime.object, &ctx.args);
+        },
+    }
+
+    return ctx;
+}
+
+fn runtimeProbeParseRuntimeArgs(
+    allocator: std.mem.Allocator,
+    runtime: std.json.ObjectMap,
+    args: *std.ArrayListUnmanaged([]u8),
+) !void {
+    if (runtime.get("args")) |raw_args| {
+        if (raw_args != .array) return error.InvalidArguments;
+        for (raw_args.array.items) |item| {
+            if (item != .string or item.string.len == 0) return error.InvalidArguments;
+            try args.append(allocator, try allocator.dupe(u8, item.string));
+        }
+    }
+}
+
+fn runtimeProbeDriverStart(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!void {
+    const ctx: *RuntimeProbeDriverCtx = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    const health = runtimeProbeEvaluateHealth(allocator, ctx);
+    if (health.state != .online) return error.DriverProbeOffline;
+    ctx.running = true;
+}
+
+fn runtimeProbeDriverStop(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) void {
+    _ = allocator;
+    const ctx: *RuntimeProbeDriverCtx = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+    ctx.running = false;
+}
+
+fn runtimeProbeDriverHealth(ctx_ptr: *anyopaque, allocator: std.mem.Allocator) anyerror!namespace_driver.Health {
+    const ctx: *RuntimeProbeDriverCtx = @ptrCast(@alignCast(ctx_ptr));
+    ctx.mutex.lock();
+    defer ctx.mutex.unlock();
+
+    if (!ctx.running) {
+        return .{
+            .state = .offline,
+            .detail = "runtime probe stopped",
+        };
+    }
+    return runtimeProbeEvaluateHealth(allocator, ctx);
+}
+
+fn runtimeProbeDriverInvokeJson(
+    ctx_ptr: *anyopaque,
+    allocator: std.mem.Allocator,
+    op: []const u8,
+    args_json: []const u8,
+) anyerror![]u8 {
+    _ = ctx_ptr;
+    _ = op;
+    return allocator.dupe(u8, args_json);
+}
+
+fn runtimeProbeEvaluateHealth(
+    allocator: std.mem.Allocator,
+    ctx: *RuntimeProbeDriverCtx,
+) namespace_driver.Health {
+    return switch (ctx.runtime_type) {
+        .builtin => .{
+            .state = .online,
+            .detail = "builtin runtime",
+        },
+        .native_proc => runtimeProbeEvaluateNativeProc(allocator, ctx),
+        .native_inproc => runtimeProbeEvaluateNativeInproc(allocator, ctx),
+        .wasm => runtimeProbeEvaluateWasm(allocator, ctx),
+    };
+}
+
+fn runtimeProbeEvaluateNativeProc(
+    allocator: std.mem.Allocator,
+    ctx: *RuntimeProbeDriverCtx,
+) namespace_driver.Health {
+    const executable_path = ctx.executable_path orelse return .{
+        .state = .offline,
+        .detail = "missing executable_path",
+    };
+
+    const args = allocator.alloc([]const u8, ctx.args.items.len) catch return .{
+        .state = .degraded,
+        .detail = "out_of_memory",
+    };
+    defer allocator.free(args);
+    for (ctx.args.items, 0..) |arg, idx| args[idx] = arg;
+
+    var process = plugin_loader_process.launch(allocator, .{
+        .executable_path = executable_path,
+        .args = args,
+    }) catch |err| return runtimeProbeHealthFromError(err);
+    defer process.deinit(allocator);
+
+    runtimeProbeEnsureRegularFile(executable_path) catch |err| return runtimeProbeHealthFromError(err);
+    return .{
+        .state = .online,
+        .detail = "native_proc ready",
+    };
+}
+
+fn runtimeProbeEvaluateNativeInproc(
+    allocator: std.mem.Allocator,
+    ctx: *RuntimeProbeDriverCtx,
+) namespace_driver.Health {
+    const library_path = ctx.library_path orelse return .{
+        .state = .offline,
+        .detail = "missing library_path",
+    };
+    const invoke_symbol = ctx.invoke_symbol orelse plugin_loader_native.default_invoke_symbol;
+
+    var plugin = plugin_loader_native.load(allocator, .{
+        .library_path = library_path,
+        .in_process = ctx.in_process,
+        .invoke_symbol = invoke_symbol,
+        .validate_abi_symbol = true,
+    }) catch |err| return runtimeProbeHealthFromError(err);
+    defer plugin.deinit(allocator);
+
+    return .{
+        .state = .online,
+        .detail = "native_inproc ready",
+    };
+}
+
+fn runtimeProbeEvaluateWasm(
+    allocator: std.mem.Allocator,
+    ctx: *RuntimeProbeDriverCtx,
+) namespace_driver.Health {
+    const module_path = ctx.module_path orelse return .{
+        .state = .offline,
+        .detail = "missing module_path",
+    };
+    const entrypoint = ctx.entrypoint orelse "spiderweb_driver_v1";
+
+    const args = allocator.alloc([]const u8, ctx.args.items.len) catch return .{
+        .state = .degraded,
+        .detail = "out_of_memory",
+    };
+    defer allocator.free(args);
+    for (ctx.args.items, 0..) |arg, idx| args[idx] = arg;
+
+    wasm_host_adapter.validateConfig(.{
+        .module_path = module_path,
+        .entrypoint = entrypoint,
+        .runner_path = ctx.runner_path,
+        .args = args,
+    }) catch |err| return runtimeProbeHealthFromError(err);
+
+    var plugin = plugin_loader_wasm.load(allocator, .{
+        .module_path = module_path,
+        .entrypoint = entrypoint,
+        .runner_path = ctx.runner_path,
+        .args = args,
+    }) catch |err| return runtimeProbeHealthFromError(err);
+    defer plugin.deinit(allocator);
+
+    runtimeProbeEnsureRegularFile(module_path) catch |err| return runtimeProbeHealthFromError(err);
+
+    if (ctx.runner_path) |runner| {
+        if (runtimeProbeLooksLikePath(runner)) {
+            runtimeProbeEnsureRegularFile(runner) catch |err| return runtimeProbeHealthFromError(err);
+        }
+    }
+
+    return .{
+        .state = .online,
+        .detail = "wasm ready",
+    };
+}
+
+fn runtimeProbeEnsureRegularFile(path: []const u8) !void {
+    const stat = try std.fs.cwd().statFile(path);
+    if (stat.kind == .directory) return error.PathIsDirectory;
+}
+
+fn runtimeProbeLooksLikePath(value: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, value, '/')) |_| return true;
+    if (std.mem.indexOfScalar(u8, value, '\\')) |_| return true;
+    if (std.mem.startsWith(u8, value, ".")) return true;
+    if (value.len >= 2 and std.ascii.isAlphabetic(value[0]) and value[1] == ':') return true;
+    return false;
+}
+
+fn runtimeProbeHealthFromError(err: anyerror) namespace_driver.Health {
+    return switch (err) {
+        error.FileNotFound, error.PathIsDirectory => .{
+            .state = .offline,
+            .detail = @errorName(err),
+        },
+        else => .{
+            .state = .degraded,
+            .detail = @errorName(err),
+        },
+    };
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -1598,6 +1945,7 @@ fn refreshControlRuntimeForNode(
     service_registry: *node_capability_providers.Registry,
     shared_service_registry: *SharedServiceRegistry,
     runtime_manager: *service_runtime_manager.RuntimeManager,
+    runtime_probe_store: *RuntimeProbeDriverStore,
     runtime_namespace_exports: *std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned),
     effective_exports: *std.ArrayListUnmanaged(fs_node_ops.ExportSpec),
     service: *fs_node_service.NodeService,
@@ -1660,7 +2008,12 @@ fn refreshControlRuntimeForNode(
     service.* = next_service;
     old_service.deinit();
 
-    try syncServiceRuntimeManagerFromRegistry(allocator, service_registry, runtime_manager);
+    try syncServiceRuntimeManagerFromRegistry(
+        allocator,
+        service_registry,
+        runtime_manager,
+        runtime_probe_store,
+    );
     try shared_service_registry.replaceFrom(service_registry);
 
     if (last_manifest_payload.*) |previous| allocator.free(previous);
@@ -1676,12 +2029,27 @@ fn syncServiceRuntimeManagerFromRegistry(
     allocator: std.mem.Allocator,
     service_registry: *const node_capability_providers.Registry,
     runtime_manager: *service_runtime_manager.RuntimeManager,
+    runtime_probe_store: *RuntimeProbeDriverStore,
 ) !void {
     runtime_manager.stopAll();
     runtime_manager.deinit();
+    runtime_probe_store.clear();
     runtime_manager.* = service_runtime_manager.RuntimeManager.init(allocator);
     for (service_registry.extra_services.items) |service| {
-        try runtime_manager.registerFromServiceJson(service.service_json);
+        var parsed = try service_runtime_manager.parseServiceRegistrationFromServiceJson(
+            allocator,
+            service.service_json,
+        );
+        defer parsed.deinit(allocator);
+        const driver = try runtime_probe_store.driverFromServiceJson(
+            &parsed.descriptor,
+            service.service_json,
+        );
+        try runtime_manager.registerWithPolicy(
+            &parsed.descriptor,
+            driver,
+            parsed.policy,
+        );
     }
     try runtime_manager.startAll();
 }
@@ -1709,6 +2077,8 @@ fn runControlRoutedNodeService(
 
     var service = try fs_node_service.NodeService.init(allocator, base_exports);
     defer service.deinit();
+    var runtime_probe_store = RuntimeProbeDriverStore.init(allocator);
+    defer runtime_probe_store.deinit();
     var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
     defer runtime_manager.deinit();
     const runtime_state_path = try runtimeStatePathForNodeState(allocator, state_path);
@@ -1747,6 +2117,7 @@ fn runControlRoutedNodeService(
             service_registry,
             shared_service_registry,
             &runtime_manager,
+            &runtime_probe_store,
             &runtime_namespace_exports,
             &effective_exports,
             &service,
@@ -1819,6 +2190,7 @@ fn runControlRoutedNodeService(
                     service_registry,
                     shared_service_registry,
                     &runtime_manager,
+                    &runtime_probe_store,
                     &runtime_namespace_exports,
                     &effective_exports,
                     &service,
@@ -2911,6 +3283,8 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
     var shared_registry = try SharedServiceRegistry.init(allocator, &registry);
     defer shared_registry.deinit();
 
+    var runtime_probe_store = RuntimeProbeDriverStore.init(allocator);
+    defer runtime_probe_store.deinit();
     var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
     defer runtime_manager.deinit();
     var runtime_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
@@ -2934,6 +3308,7 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
         &registry,
         &shared_registry,
         &runtime_manager,
+        &runtime_probe_store,
         &runtime_exports,
         &effective_exports,
         &service,
@@ -2953,6 +3328,7 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
         &registry,
         &shared_registry,
         &runtime_manager,
+        &runtime_probe_store,
         &runtime_exports,
         &effective_exports,
         &service,
@@ -2981,6 +3357,7 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
         &registry,
         &shared_registry,
         &runtime_manager,
+        &runtime_probe_store,
         &runtime_exports,
         &effective_exports,
         &service,
@@ -2989,4 +3366,66 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
     );
     try std.testing.expect(changed_update);
     try std.testing.expectEqualStrings("hot-b", registry.extra_services.items[0].service_id);
+}
+
+test "fs_node_main: syncServiceRuntimeManagerFromRegistry probes runtime drivers" {
+    const allocator = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const root = try temp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+
+    const executable_path = try std.fmt.allocPrint(allocator, "{s}/probe-driver", .{root});
+    defer allocator.free(executable_path);
+    try temp.dir.writeFile(.{
+        .sub_path = "probe-driver",
+        .data = "#!/bin/sh\necho ok\n",
+    });
+
+    var registry = try node_capability_providers.Registry.init(allocator, .{
+        .enable_fs_service = false,
+    });
+    defer registry.deinit();
+
+    const escaped_exec = try jsonEscape(allocator, executable_path);
+    defer allocator.free(escaped_exec);
+    const service_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"service_id\":\"svc-probe\",\"kind\":\"tooling\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/services/svc-probe\"],\"mounts\":[{{\"mount_id\":\"svc-probe\",\"mount_path\":\"/nodes/node-1/services/svc-probe\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"namespace-driver-v1\",\"executable_path\":\"{s}\",\"supervision\":{{\"health_check_interval_ms\":10,\"restart_backoff_ms\":5,\"restart_backoff_max_ms\":20}}}},\"permissions\":{{\"default\":\"deny-by-default\"}},\"schema\":{{\"model\":\"namespace-mount\"}}}}",
+        .{escaped_exec},
+    );
+    defer allocator.free(service_json);
+
+    try registry.addExtraService("svc-probe", service_json);
+
+    var runtime_probe_store = RuntimeProbeDriverStore.init(allocator);
+    defer runtime_probe_store.deinit();
+    var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
+    defer runtime_manager.deinit();
+
+    try syncServiceRuntimeManagerFromRegistry(
+        allocator,
+        &registry,
+        &runtime_manager,
+        &runtime_probe_store,
+    );
+
+    const initial_stats = runtime_manager.serviceRuntimeStats("svc-probe") orelse return error.TestExpectedResponse;
+    try std.testing.expect(initial_stats.running);
+    try std.testing.expectEqual(namespace_driver.ServiceState.online, runtime_manager.serviceState("svc-probe").?);
+
+    try temp.dir.deleteFile("probe-driver");
+
+    const deadline = std.time.milliTimestamp() + 2_000;
+    var degraded = false;
+    while (std.time.milliTimestamp() < deadline) {
+        const state = runtime_manager.serviceState("svc-probe") orelse return error.TestExpectedResponse;
+        if (state != .online) {
+            degraded = true;
+            break;
+        }
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+
+    try std.testing.expect(degraded);
 }
