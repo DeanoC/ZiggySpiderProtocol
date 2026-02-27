@@ -687,14 +687,14 @@ pub fn main() !void {
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "--internal-inproc-invoke")) {
         runInternalInprocInvoke(allocator, args[2..]) catch |err| {
-            std.fs.File.stderr().writer().print("internal inproc invoke failed: {s}\n", .{@errorName(err)}) catch {};
+            std.debug.print("internal inproc invoke failed: {s}\n", .{@errorName(err)});
             std.process.exit(125);
         };
         unreachable;
     }
     if (args.len >= 2 and std.mem.eql(u8, args[1], "--internal-terminal-invoke")) {
         runInternalTerminalInvoke(allocator, args[2..]) catch |err| {
-            std.fs.File.stderr().writer().print("internal terminal invoke failed: {s}\n", .{@errorName(err)}) catch {};
+            std.debug.print("internal terminal invoke failed: {s}\n", .{@errorName(err)});
             std.process.exit(125);
         };
         unreachable;
