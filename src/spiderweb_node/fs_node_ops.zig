@@ -32,7 +32,6 @@ const namespace_chat_meta_json =
     "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
 const namespace_service_schema_json =
     "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\"}";
-const namespace_service_inproc_invoke_symbol: []const u8 = "spiderweb_driver_v1_invoke_json";
 const namespace_service_wasm_default_runner: []const u8 = "wasmtime";
 
 const max_read_bytes: u32 = 1024 * 1024;
@@ -1492,7 +1491,7 @@ pub const NodeOps = struct {
         defer invoke_result.deinit(self.allocator);
         const finished_ms: i64 = std.time.milliTimestamp();
         const duration_ms: u64 = @intCast(@max(@as(i64, 0), finished_ms - started_ms));
-        const timeout_hit = invoke_result.timed_out or (service_cfg.runtime_kind == .native_inproc and service_cfg.timeout_ms > 0 and duration_ms > service_cfg.timeout_ms);
+        const timeout_hit = invoke_result.timed_out;
         stats.last_finished_ms = finished_ms;
         stats.last_duration_ms = duration_ms;
         stats.last_exit_code = invoke_result.exit_code;
@@ -1651,48 +1650,16 @@ pub const NodeOps = struct {
         payload: []const u8,
     ) !ServiceProcessResult {
         const library_path = service_cfg.library_path orelse return error.InvalidArguments;
-        var lib = try std.DynLib.open(library_path);
-        defer lib.close();
+        const self_exe = try std.fs.selfExePathAlloc(self.allocator);
+        defer self.allocator.free(self_exe);
 
-        const InprocInvokeFn = *const fn (
-            payload_ptr: [*]const u8,
-            payload_len: usize,
-            stdout_ptr: [*]u8,
-            stdout_cap: usize,
-            stdout_len: *usize,
-            stderr_ptr: [*]u8,
-            stderr_cap: usize,
-            stderr_len: *usize,
-        ) callconv(.c) i32;
-
-        const invoke_fn = lib.lookup(InprocInvokeFn, namespace_service_inproc_invoke_symbol) orelse return error.MissingSymbol;
-
-        const stdout_buffer = try self.allocator.alloc(u8, max_write_bytes);
-        defer self.allocator.free(stdout_buffer);
-        const stderr_buffer = try self.allocator.alloc(u8, max_write_bytes);
-        defer self.allocator.free(stderr_buffer);
-        var stdout_len: usize = 0;
-        var stderr_len: usize = 0;
-
-        const exit_code = invoke_fn(
-            payload.ptr,
-            payload.len,
-            stdout_buffer.ptr,
-            stdout_buffer.len,
-            &stdout_len,
-            stderr_buffer.ptr,
-            stderr_buffer.len,
-            &stderr_len,
-        );
-        if (stdout_len > stdout_buffer.len or stderr_len > stderr_buffer.len) return error.InvalidPayload;
-
-        return .{
-            .stdout = try self.allocator.dupe(u8, stdout_buffer[0..stdout_len]),
-            .stderr = try self.allocator.dupe(u8, stderr_buffer[0..stderr_len]),
-            .exit_code = exit_code,
-            .success = exit_code == 0,
-            .timed_out = false,
-        };
+        var argv = std.ArrayListUnmanaged([]const u8){};
+        defer argv.deinit(self.allocator);
+        try argv.append(self.allocator, self_exe);
+        try argv.append(self.allocator, "--internal-inproc-invoke");
+        try argv.append(self.allocator, "--library-path");
+        try argv.append(self.allocator, library_path);
+        return self.executeNamespaceServiceCommandArgv(argv.items, payload, service_cfg.timeout_ms);
     }
 
     fn executeNamespaceServiceWasm(

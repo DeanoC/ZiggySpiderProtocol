@@ -23,6 +23,8 @@ const fsrpc_node_protocol_version = "unified-v2-fs";
 const fsrpc_node_proto_id: i64 = 2;
 const control_node_not_found_code = "node_not_found";
 const control_node_auth_failed_code = "node_auth_failed";
+const inproc_helper_max_io_bytes: usize = 1024 * 1024;
+const inproc_helper_invoke_symbol = "spiderweb_driver_v1_invoke_json";
 
 const PairMode = enum {
     invite,
@@ -301,6 +303,14 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "--internal-inproc-invoke")) {
+        runInternalInprocInvoke(allocator, args[2..]) catch |err| {
+            std.fs.File.stderr().writer().print("internal inproc invoke failed: {s}\n", .{@errorName(err)}) catch {};
+            std.process.exit(125);
+        };
+        unreachable;
+    }
 
     var bind_addr: []const u8 = "127.0.0.1";
     var port: u16 = 18891;
@@ -688,6 +698,71 @@ pub fn main() !void {
     }
 
     try fs_node_server.run(allocator, bind_addr, port, effective_exports.items, auth_token);
+}
+
+fn runInternalInprocInvoke(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var library_path: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--library-path")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            library_path = args[i];
+        } else {
+            return error.InvalidArguments;
+        }
+    }
+
+    const lib_path = library_path orelse return error.InvalidArguments;
+    var lib = try std.DynLib.open(lib_path);
+    defer lib.close();
+
+    const InprocInvokeFn = *const fn (
+        payload_ptr: [*]const u8,
+        payload_len: usize,
+        stdout_ptr: [*]u8,
+        stdout_cap: usize,
+        stdout_len: *usize,
+        stderr_ptr: [*]u8,
+        stderr_cap: usize,
+        stderr_len: *usize,
+    ) callconv(.c) i32;
+
+    const invoke_fn = lib.lookup(InprocInvokeFn, inproc_helper_invoke_symbol) orelse return error.MissingSymbol;
+    const payload = try std.fs.File.stdin().readToEndAlloc(allocator, inproc_helper_max_io_bytes);
+    defer allocator.free(payload);
+
+    const stdout_buffer = try allocator.alloc(u8, inproc_helper_max_io_bytes);
+    defer allocator.free(stdout_buffer);
+    const stderr_buffer = try allocator.alloc(u8, inproc_helper_max_io_bytes);
+    defer allocator.free(stderr_buffer);
+    var stdout_len: usize = 0;
+    var stderr_len: usize = 0;
+
+    const exit_code = invoke_fn(
+        payload.ptr,
+        payload.len,
+        stdout_buffer.ptr,
+        stdout_buffer.len,
+        &stdout_len,
+        stderr_buffer.ptr,
+        stderr_buffer.len,
+        &stderr_len,
+    );
+    if (stdout_len > stdout_buffer.len or stderr_len > stderr_buffer.len) return error.InvalidPayload;
+
+    if (stdout_len > 0) try std.fs.File.stdout().writeAll(stdout_buffer[0..stdout_len]);
+    if (stderr_len > 0) try std.fs.File.stderr().writeAll(stderr_buffer[0..stderr_len]);
+
+    const clamped_exit_code: u8 = if (exit_code < 0)
+        255
+    else if (exit_code > 255)
+        255
+    else
+        @intCast(exit_code);
+    std.process.exit(clamped_exit_code);
 }
 
 fn parsePairMode(raw: []const u8) ?PairMode {

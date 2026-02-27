@@ -80,12 +80,13 @@ Result mapping:
 
 Timeout behavior:
 
-- `runtime.timeout_ms` is enforced as a hard deadline for `native_proc` and
-  `wasm` (runner process is force-terminated when deadline is reached)
+- `runtime.timeout_ms` is enforced as a hard deadline for `native_proc`,
+  `native_inproc`, and `wasm`
+- `native_inproc` runs inside an internal helper subprocess so deadline
+  enforcement can safely terminate execution
+- when deadline is reached, the active runtime process is force-terminated
 - `status.json.state` becomes `"timeout"`
 - `timeouts_total` increments in `metrics.json`
-- `native_inproc` currently has no preemptive cancellation and falls back to
-  duration-based timeout accounting
 
 `metrics.json` tracks invocation counters and timing:
 

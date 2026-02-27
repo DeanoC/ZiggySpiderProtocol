@@ -22,7 +22,7 @@ Shared Spiderweb protocol parsing/building utilities for Zig-based server and cl
     - `plugin_loader_native`, `plugin_loader_process`, `plugin_loader_wasm` (runtime loader scaffolds)
     - executable namespace runtime paths:
       - `native_proc` (process stdin/stdout contract with hard timeout kill)
-      - `native_inproc` (dynamic library invoke symbol)
+      - `native_inproc` (dynamic library invoke symbol via isolated helper process with hard timeout kill)
       - `wasm` (runner-backed WASI execution with hard timeout kill)
   - Namespace executable ABI doc:
     - `docs/NAMESPACE_DRIVER_ABI_V1.md`
