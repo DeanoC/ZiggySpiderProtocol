@@ -8,6 +8,7 @@ const node_capability_providers = @import("node_capability_providers.zig");
 const plugin_loader_native = @import("plugin_loader_native.zig");
 const plugin_loader_process = @import("plugin_loader_process.zig");
 const plugin_loader_wasm = @import("plugin_loader_wasm.zig");
+const wasm_host_adapter = @import("wasm_host_adapter.zig");
 const service_manifest = @import("service_manifest.zig");
 const service_runtime_manager = @import("service_runtime_manager.zig");
 const unified = @import("ziggy-spider-protocol").unified;
@@ -1086,6 +1087,12 @@ fn validateServiceRuntimeConfig(
                     try args.append(allocator, item.string);
                 }
             }
+            try wasm_host_adapter.validateConfig(.{
+                .module_path = path,
+                .entrypoint = entrypoint,
+                .runner_path = runner_path,
+                .args = args.items,
+            });
             var handle = try plugin_loader_wasm.load(allocator, .{
                 .module_path = path,
                 .entrypoint = entrypoint,
@@ -1539,6 +1546,11 @@ fn runControlRoutedNodeService(
 ) !void {
     var service = try fs_node_service.NodeService.init(allocator, export_specs);
     defer service.deinit();
+    const runtime_state_path = try runtimeStatePathForNodeState(allocator, state_path);
+    defer allocator.free(runtime_state_path);
+    loadNamespaceRuntimeStateFromFile(allocator, runtime_state_path, &service) catch |err| {
+        std.log.warn("control tunnel: failed loading runtime state from {s}: {s}", .{ runtime_state_path, @errorName(err) });
+    };
 
     var attempts: u32 = 0;
     while (true) {
@@ -1629,6 +1641,11 @@ fn runControlRoutedNodeService(
                         try writeClientTextFrameMasked(allocator, &stream, event_json);
                     }
                     try writeClientTextFrameMasked(allocator, &stream, handled.response_json);
+                    if (service.takeNamespaceRuntimeStateDirty()) {
+                        saveNamespaceRuntimeStateToFile(allocator, runtime_state_path, &service) catch |save_err| {
+                            std.log.warn("control tunnel: failed saving runtime state to {s}: {s}", .{ runtime_state_path, @errorName(save_err) });
+                        };
+                    }
                 },
                 0x8 => {
                     _ = writeClientFrameMasked(allocator, &stream, frame.payload, 0x8) catch {};
@@ -1897,6 +1914,39 @@ fn saveNodePairState(allocator: std.mem.Allocator, state_path: []const u8, state
 
     try std.fs.cwd().writeFile(.{ .sub_path = tmp_path, .data = out.items });
     try std.fs.cwd().rename(tmp_path, state_path);
+}
+
+fn runtimeStatePathForNodeState(allocator: std.mem.Allocator, state_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.runtime-services.json", .{state_path});
+}
+
+fn loadNamespaceRuntimeStateFromFile(
+    allocator: std.mem.Allocator,
+    runtime_state_path: []const u8,
+    service: *fs_node_service.NodeService,
+) !void {
+    const raw = std.fs.cwd().readFileAlloc(allocator, runtime_state_path, 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer allocator.free(raw);
+    try service.restoreNamespaceRuntimeStateJson(raw);
+}
+
+fn saveNamespaceRuntimeStateToFile(
+    allocator: std.mem.Allocator,
+    runtime_state_path: []const u8,
+    service: *fs_node_service.NodeService,
+) !void {
+    const payload = try service.exportNamespaceRuntimeStateJson(allocator);
+    defer allocator.free(payload);
+
+    try ensureParentPathExists(runtime_state_path);
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{runtime_state_path});
+    defer allocator.free(tmp_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = tmp_path, .data = payload });
+    try std.fs.cwd().rename(tmp_path, runtime_state_path);
 }
 
 fn appendOptionalJsonStringField(
@@ -2387,6 +2437,72 @@ test "fs_node_main: loads extra services from manifest file" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"/nodes/node-5/camera\"") != null);
 }
 
+test "fs_node_main: loads wasm non-fs service and creates runtime namespace export" {
+    const allocator = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+
+    try temp.dir.writeFile(.{
+        .sub_path = "converter.json",
+        .data =
+        \\{
+        \\  "service_id": "doc-convert",
+        \\  "kind": "converter",
+        \\  "endpoints": ["/nodes/{node_id}/convert"],
+        \\  "runtime": {
+        \\    "type": "wasm",
+        \\    "module_path": "./drivers/convert.wasm",
+        \\    "runner_path": "wasmtime",
+        \\    "entrypoint": "invoke",
+        \\    "args": ["--sandbox", "strict"]
+        \\  },
+        \\  "mounts": [{"mount_id":"doc-convert","mount_path":"/nodes/{node_id}/convert","state":"online"}]
+        \\}
+        ,
+    });
+
+    const root = try temp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+    const manifest_path = try std.fmt.allocPrint(allocator, "{s}/converter.json", .{root});
+    defer allocator.free(manifest_path);
+
+    var registry = try node_capability_providers.Registry.init(allocator, .{
+        .enable_fs_service = false,
+    });
+    defer registry.deinit();
+    var runtime_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &runtime_exports);
+        runtime_exports.deinit(allocator);
+    }
+
+    try loadConfiguredManifestServices(
+        allocator,
+        "node-9",
+        &.{manifest_path},
+        &.{},
+        &registry,
+        &runtime_exports,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), runtime_exports.items.len);
+    try std.testing.expect(runtime_exports.items[0].runtime_kind == .wasm);
+    try std.testing.expectEqualStrings("doc-convert", runtime_exports.items[0].service_id);
+    try std.testing.expectEqualStrings("./drivers/convert.wasm", runtime_exports.items[0].module_path.?);
+
+    const payload = try registry.buildServiceUpsertPayload(
+        allocator,
+        "node-9",
+        "secret",
+        "linux",
+        "amd64",
+        "native",
+    );
+    defer allocator.free(payload);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"doc-convert\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"kind\":\"converter\"") != null);
+}
+
 test "fs_node_main: runtime validator accepts declarative runtime metadata" {
     const allocator = std.testing.allocator;
     try validateServiceRuntimeConfig(
@@ -2513,4 +2629,11 @@ test "fs_node_main: node pair state save/load roundtrip" {
     try std.testing.expectEqualStrings("pending-join-2", loaded.request_id.?);
     try std.testing.expectEqualStrings("edge-12", loaded.node_name.?);
     try std.testing.expectEqualStrings("ws://10.0.0.12:18891/v2/fs", loaded.fs_url.?);
+}
+
+test "fs_node_main: runtime state path derives from node state path" {
+    const allocator = std.testing.allocator;
+    const path = try runtimeStatePathForNodeState(allocator, "/tmp/pair-state.json");
+    defer allocator.free(path);
+    try std.testing.expectEqualStrings("/tmp/pair-state.json.runtime-services.json", path);
 }

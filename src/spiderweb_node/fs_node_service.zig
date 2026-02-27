@@ -94,6 +94,24 @@ pub const NodeService = struct {
         return self.ops.copyExportRootPaths(allocator);
     }
 
+    pub fn exportNamespaceRuntimeStateJson(self: *NodeService, allocator: std.mem.Allocator) ![]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.ops.exportNamespaceRuntimeStateJson(allocator);
+    }
+
+    pub fn restoreNamespaceRuntimeStateJson(self: *NodeService, state_json: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.ops.restoreNamespaceRuntimeStateJson(state_json);
+    }
+
+    pub fn takeNamespaceRuntimeStateDirty(self: *NodeService) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.ops.takeNamespaceRuntimeStateDirty();
+    }
+
     fn handleParsedRequestWithEventsUnlocked(self: *NodeService, req: fs_protocol.ParsedRequest) !HandledRequest {
         var result = self.ops.dispatch(req);
         defer result.deinit(self.allocator);

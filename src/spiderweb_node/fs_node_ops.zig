@@ -7,6 +7,7 @@ const fs_local_source_adapter = @import("fs_local_source_adapter.zig");
 const fs_windows_source_adapter = @import("fs_windows_source_adapter.zig");
 const fs_gdrive_backend = @import("fs_gdrive_backend.zig");
 const credential_store = @import("credential_store.zig");
+const wasm_host_adapter = @import("wasm_host_adapter.zig");
 
 const node_id_export_shift: u6 = 48;
 const node_id_export_mask: u64 = 0xFFFF_0000_0000_0000;
@@ -404,6 +405,7 @@ pub const NodeOps = struct {
     pending_events: std.ArrayListUnmanaged(fs_protocol.InvalidationEvent) = .{},
     watch_snapshot: std.AutoHashMapUnmanaged(u64, WatchedNode) = .{},
     watch_initialized: bool = false,
+    namespace_runtime_state_dirty: bool = false,
     mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator, specs: []const ExportSpec) !NodeOps {
@@ -562,6 +564,122 @@ pub const NodeOps = struct {
             built += 1;
         }
         return roots;
+    }
+
+    pub fn exportNamespaceRuntimeStateJson(self: *const NodeOps, allocator: std.mem.Allocator) ![]u8 {
+        var out = std.ArrayListUnmanaged(u8){};
+        errdefer out.deinit(allocator);
+
+        try out.appendSlice(allocator, "{\"schema\":1,\"services\":[");
+        var first = true;
+
+        for (self.exports.items, 0..) |export_cfg, export_index| {
+            const service_cfg = export_cfg.namespace_service orelse continue;
+            if (!std.mem.startsWith(u8, export_cfg.source_id, "service:")) continue;
+            const runtime = self.namespace_service_runtime.get(export_index) orelse continue;
+            const stats = self.namespace_service_stats.get(export_index) orelse NamespaceServiceRuntimeStats{};
+            const ns = self.namespace_exports.getPtr(export_index) orelse continue;
+
+            const result_content = namespaceFileContentByPath(ns, "/result.json") orelse "";
+            const status_content = namespaceFileContentByPath(ns, "/status.json") orelse "";
+            const error_content = namespaceFileContentByPath(ns, "/last_error.txt") orelse "";
+
+            const escaped_service_id = try fs_protocol.jsonEscape(allocator, service_cfg.service_id);
+            defer allocator.free(escaped_service_id);
+            const escaped_last_control = try fs_protocol.jsonEscape(allocator, runtime.last_control_op);
+            defer allocator.free(escaped_last_control);
+            const escaped_config_json = try fs_protocol.jsonEscape(allocator, runtime.config_json);
+            defer allocator.free(escaped_config_json);
+            const escaped_result = try fs_protocol.jsonEscape(allocator, result_content);
+            defer allocator.free(escaped_result);
+            const escaped_status = try fs_protocol.jsonEscape(allocator, status_content);
+            defer allocator.free(escaped_status);
+            const escaped_error = try fs_protocol.jsonEscape(allocator, error_content);
+            defer allocator.free(escaped_error);
+
+            if (!first) try out.append(allocator, ',');
+            first = false;
+            try out.writer(allocator).print(
+                "{{\"service_id\":\"{s}\",\"runtime\":{{\"enabled\":{},\"restarts_total\":{d},\"last_control_ms\":{d},\"last_control_op\":\"{s}\",\"config_json\":\"{s}\",\"cooldown_until_ms\":{d},\"supervision\":{{\"max_consecutive_failures\":{d},\"max_consecutive_timeouts\":{d},\"cooldown_ms\":{d},\"auto_disable_on_threshold\":{}}}}},\"stats\":{{\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}},\"result_json\":\"{s}\",\"status_json\":\"{s}\",\"last_error\":\"{s}\"}}",
+                .{
+                    escaped_service_id,
+                    runtime.enabled,
+                    runtime.restarts_total,
+                    runtime.last_control_ms,
+                    escaped_last_control,
+                    escaped_config_json,
+                    runtime.cooldown_until_ms,
+                    runtime.supervision.max_consecutive_failures,
+                    runtime.supervision.max_consecutive_timeouts,
+                    runtime.supervision.cooldown_ms,
+                    runtime.supervision.auto_disable_on_threshold,
+                    stats.invokes_total,
+                    stats.failures_total,
+                    stats.consecutive_failures,
+                    stats.timeouts_total,
+                    stats.consecutive_timeouts,
+                    stats.last_duration_ms,
+                    stats.last_started_ms,
+                    stats.last_finished_ms,
+                    stats.last_exit_code,
+                    escaped_result,
+                    escaped_status,
+                    escaped_error,
+                },
+            );
+        }
+
+        try out.appendSlice(allocator, "]}");
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn restoreNamespaceRuntimeStateJson(self: *NodeOps, state_json: []const u8) !void {
+        var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, state_json, .{});
+        defer parsed.deinit();
+        if (parsed.value != .object) return error.InvalidPayload;
+
+        const services_value = parsed.value.object.get("services") orelse {
+            self.namespace_runtime_state_dirty = false;
+            return;
+        };
+        if (services_value != .array) return error.InvalidPayload;
+
+        for (services_value.array.items) |service_value| {
+            if (service_value != .object) return error.InvalidPayload;
+            const service_id_value = service_value.object.get("service_id") orelse return error.InvalidPayload;
+            if (service_id_value != .string or service_id_value.string.len == 0) return error.InvalidPayload;
+            const export_index = self.namespaceServiceExportIndexById(service_id_value.string) orelse continue;
+
+            const runtime = try self.namespaceServiceRuntimePtr(export_index);
+            const stats = try self.namespaceServiceStatsPtr(export_index);
+
+            if (service_value.object.get("runtime")) |runtime_value| {
+                if (runtime_value != .object) return error.InvalidPayload;
+                try self.restoreNamespaceRuntimeControl(runtime, runtime_value.object);
+            }
+            if (service_value.object.get("stats")) |stats_value| {
+                if (stats_value != .object) return error.InvalidPayload;
+                try self.restoreNamespaceRuntimeStats(stats, stats_value.object);
+            }
+
+            const result_json = try jsonOptionalStringValue(service_value.object, "result_json");
+            const status_json = try jsonOptionalStringValue(service_value.object, "status_json");
+            const last_error = try jsonOptionalStringValue(service_value.object, "last_error");
+            try self.refreshNamespaceServiceRuntimeFiles(
+                export_index,
+                result_json,
+                status_json,
+                last_error,
+            );
+        }
+
+        self.namespace_runtime_state_dirty = false;
+    }
+
+    pub fn takeNamespaceRuntimeStateDirty(self: *NodeOps) bool {
+        const dirty = self.namespace_runtime_state_dirty;
+        self.namespace_runtime_state_dirty = false;
+        return dirty;
     }
 
     fn rejectUnimplementedSourceRequest(self: *NodeOps, req: fs_protocol.ParsedRequest) ?DispatchResult {
@@ -1504,6 +1622,10 @@ pub const NodeOps = struct {
         const stats = try self.namespaceServiceStatsPtr(export_index);
         const runtime = try self.namespaceServiceRuntimePtr(export_index);
         const now_ms: i64 = std.time.milliTimestamp();
+        var runtime_state_changed = false;
+        defer {
+            if (runtime_state_changed) self.namespace_runtime_state_dirty = true;
+        }
 
         if (std.mem.eql(u8, node.path, "/config.json")) {
             const payload = std.mem.trim(u8, node.content, " \t\r\n");
@@ -1532,6 +1654,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return;
         }
 
@@ -1544,6 +1667,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return;
         }
 
@@ -1555,6 +1679,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return;
         }
 
@@ -1572,6 +1697,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return;
         }
 
@@ -1593,6 +1719,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return;
         }
         if (!std.mem.eql(u8, node.path, "/control/invoke.json")) return;
@@ -1603,6 +1730,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return error.AccessDenied;
         }
 
@@ -1623,6 +1751,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return error.WouldBlock;
         }
 
@@ -1653,6 +1782,7 @@ pub const NodeOps = struct {
         );
         defer self.allocator.free(running_status);
         try self.namespaceSetFileContent(ns, status_id, running_status);
+        runtime_state_changed = true;
 
         var invoke_result = try self.executeNamespaceServiceInvocation(&service_cfg, payload);
         defer invoke_result.deinit(self.allocator);
@@ -1695,6 +1825,7 @@ pub const NodeOps = struct {
             const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
             defer self.allocator.free(health_json);
             try self.namespaceSetFileContent(ns, health_id, health_json);
+            runtime_state_changed = true;
             return;
         }
 
@@ -1782,6 +1913,7 @@ pub const NodeOps = struct {
         const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
         defer self.allocator.free(health_json);
         try self.namespaceSetFileContent(ns, health_id, health_json);
+        runtime_state_changed = true;
     }
 
     const ServiceProcessResult = struct {
@@ -1937,18 +2069,18 @@ pub const NodeOps = struct {
         payload: []const u8,
     ) !ServiceProcessResult {
         const module_path = service_cfg.module_path orelse return error.InvalidArguments;
-        const runner = service_cfg.wasm_runner_path orelse namespace_service_wasm_default_runner;
-
         var argv = std.ArrayListUnmanaged([]const u8){};
         defer argv.deinit(self.allocator);
-        try argv.append(self.allocator, runner);
-        try argv.append(self.allocator, "run");
-        if (service_cfg.wasm_entrypoint) |entrypoint| {
-            try argv.append(self.allocator, "--invoke");
-            try argv.append(self.allocator, entrypoint);
-        }
-        try argv.append(self.allocator, module_path);
-        for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
+        try wasm_host_adapter.appendRunArgv(
+            self.allocator,
+            .{
+                .module_path = module_path,
+                .entrypoint = service_cfg.wasm_entrypoint,
+                .runner_path = if (service_cfg.wasm_runner_path) |value| value else namespace_service_wasm_default_runner,
+                .args = service_cfg.args.items,
+            },
+            &argv,
+        );
         return self.executeNamespaceServiceCommandArgv(argv.items, payload, service_cfg.timeout_ms);
     }
 
@@ -2045,6 +2177,134 @@ pub const NodeOps = struct {
         errdefer initial.deinit(self.allocator);
         try self.namespace_service_runtime.put(self.allocator, export_index, initial);
         return self.namespace_service_runtime.getPtr(export_index).?;
+    }
+
+    fn namespaceServiceExportIndexById(self: *const NodeOps, service_id: []const u8) ?usize {
+        for (self.exports.items, 0..) |export_cfg, export_index| {
+            const service_cfg = export_cfg.namespace_service orelse continue;
+            if (std.mem.eql(u8, service_cfg.service_id, service_id)) return export_index;
+        }
+        return null;
+    }
+
+    fn restoreNamespaceRuntimeControl(
+        self: *NodeOps,
+        runtime: *NamespaceServiceRuntimeControl,
+        obj: std.json.ObjectMap,
+    ) !void {
+        if (obj.get("enabled")) |value| {
+            if (value != .bool) return error.InvalidPayload;
+            runtime.enabled = value.bool;
+        }
+        if (try jsonOptionalNonNegativeU64(obj, "restarts_total")) |value| runtime.restarts_total = value;
+        if (obj.get("last_control_ms")) |value| {
+            if (value != .integer) return error.InvalidPayload;
+            runtime.last_control_ms = value.integer;
+        }
+        if (obj.get("last_control_op")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidPayload;
+            const next = try self.allocator.dupe(u8, value.string);
+            self.allocator.free(runtime.last_control_op);
+            runtime.last_control_op = next;
+        }
+        if (obj.get("config_json")) |value| {
+            if (value != .string) return error.InvalidPayload;
+            var parsed_config = try std.json.parseFromSlice(std.json.Value, self.allocator, value.string, .{});
+            defer parsed_config.deinit();
+            if (parsed_config.value != .object) return error.InvalidPayload;
+            const rendered = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(parsed_config.value, .{})});
+            defer self.allocator.free(rendered);
+            const next = try self.allocator.dupe(u8, rendered);
+            self.allocator.free(runtime.config_json);
+            runtime.config_json = next;
+            runtime.supervision = try self.parseNamespaceServiceSupervisionPolicy(parsed_config.value);
+        }
+        if (obj.get("cooldown_until_ms")) |value| {
+            if (value != .integer) return error.InvalidPayload;
+            runtime.cooldown_until_ms = value.integer;
+        }
+        if (obj.get("supervision")) |value| {
+            if (value != .object) return error.InvalidPayload;
+            if (try jsonOptionalNonNegativeU64(value.object, "max_consecutive_failures")) |next| {
+                runtime.supervision.max_consecutive_failures = next;
+            }
+            if (try jsonOptionalNonNegativeU64(value.object, "max_consecutive_timeouts")) |next| {
+                runtime.supervision.max_consecutive_timeouts = next;
+            }
+            if (try jsonOptionalNonNegativeU64(value.object, "cooldown_ms")) |next| {
+                runtime.supervision.cooldown_ms = next;
+            }
+            if (value.object.get("auto_disable_on_threshold")) |raw| {
+                if (raw != .bool) return error.InvalidPayload;
+                runtime.supervision.auto_disable_on_threshold = raw.bool;
+            }
+        }
+    }
+
+    fn restoreNamespaceRuntimeStats(
+        self: *NodeOps,
+        stats: *NamespaceServiceRuntimeStats,
+        obj: std.json.ObjectMap,
+    ) !void {
+        _ = self;
+        if (try jsonOptionalNonNegativeU64(obj, "invokes_total")) |value| stats.invokes_total = value;
+        if (try jsonOptionalNonNegativeU64(obj, "failures_total")) |value| stats.failures_total = value;
+        if (try jsonOptionalNonNegativeU64(obj, "consecutive_failures")) |value| stats.consecutive_failures = value;
+        if (try jsonOptionalNonNegativeU64(obj, "timeouts_total")) |value| stats.timeouts_total = value;
+        if (try jsonOptionalNonNegativeU64(obj, "consecutive_timeouts")) |value| stats.consecutive_timeouts = value;
+        if (try jsonOptionalNonNegativeU64(obj, "last_duration_ms")) |value| stats.last_duration_ms = value;
+        if (obj.get("last_started_ms")) |value| {
+            if (value != .integer) return error.InvalidPayload;
+            stats.last_started_ms = value.integer;
+        }
+        if (obj.get("last_finished_ms")) |value| {
+            if (value != .integer) return error.InvalidPayload;
+            stats.last_finished_ms = value.integer;
+        }
+        if (obj.get("last_exit_code")) |value| {
+            if (value != .integer) return error.InvalidPayload;
+            if (value.integer < std.math.minInt(i32) or value.integer > std.math.maxInt(i32)) return error.InvalidPayload;
+            stats.last_exit_code = @intCast(value.integer);
+        }
+    }
+
+    fn refreshNamespaceServiceRuntimeFiles(
+        self: *NodeOps,
+        export_index: usize,
+        result_json: ?[]const u8,
+        status_json: ?[]const u8,
+        last_error: ?[]const u8,
+    ) !void {
+        const export_cfg = self.exports.items[export_index];
+        const service_cfg = export_cfg.namespace_service orelse return;
+        const ns = self.namespace_exports.getPtr(export_index) orelse return error.FileNotFound;
+        const runtime = self.namespace_service_runtime.getPtr(export_index) orelse return error.FileNotFound;
+        const stats = self.namespace_service_stats.getPtr(export_index) orelse return error.FileNotFound;
+
+        const config_id = namespaceLookupChildNode(ns, ns.root_id, "config.json") orelse return error.FileNotFound;
+        const metrics_id = namespaceLookupChildNode(ns, ns.root_id, "metrics.json") orelse return error.FileNotFound;
+        const health_id = namespaceLookupChildNode(ns, ns.root_id, "health.json") orelse return error.FileNotFound;
+
+        try self.namespaceSetFileContentQuiet(ns, config_id, runtime.config_json);
+        const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
+        defer self.allocator.free(metrics_json);
+        try self.namespaceSetFileContentQuiet(ns, metrics_id, metrics_json);
+        const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+        defer self.allocator.free(health_json);
+        try self.namespaceSetFileContentQuiet(ns, health_id, health_json);
+
+        if (result_json) |value| {
+            const result_id = namespaceLookupChildNode(ns, ns.root_id, "result.json") orelse return error.FileNotFound;
+            try self.namespaceSetFileContentQuiet(ns, result_id, value);
+        }
+        if (status_json) |value| {
+            const status_id = namespaceLookupChildNode(ns, ns.root_id, "status.json") orelse return error.FileNotFound;
+            try self.namespaceSetFileContentQuiet(ns, status_id, value);
+        }
+        if (last_error) |value| {
+            const error_id = namespaceLookupChildNode(ns, ns.root_id, "last_error.txt") orelse return error.FileNotFound;
+            try self.namespaceSetFileContentQuiet(ns, error_id, value);
+        }
     }
 
     fn namespaceServiceSetControlOp(
@@ -2197,6 +2457,33 @@ pub const NodeOps = struct {
                 .gen = node.generation,
             },
         });
+    }
+
+    fn namespaceSetFileContentQuiet(
+        self: *NodeOps,
+        ns: *NamespaceExport,
+        node_id: u64,
+        content: []const u8,
+    ) !void {
+        const node = ns.nodes.getPtr(node_id) orelse return error.FileNotFound;
+        if (node.kind != .file) return error.InvalidArgument;
+        const next = try self.allocator.dupe(u8, content);
+        self.allocator.free(node.content);
+        node.content = next;
+    }
+
+    fn namespaceFileContentByPath(ns: *const NamespaceExport, path: []const u8) ?[]const u8 {
+        const node_id = ns.path_to_node.get(path) orelse return null;
+        const node = ns.nodes.get(node_id) orelse return null;
+        if (node.kind != .file) return null;
+        return node.content;
+    }
+
+    fn jsonOptionalStringValue(obj: std.json.ObjectMap, key: []const u8) !?[]const u8 {
+        const value = obj.get(key) orelse return null;
+        if (value == .null) return null;
+        if (value != .string) return error.InvalidPayload;
+        return value.string;
     }
 
     fn gdriveStatusNodeId(self: *const NodeOps, export_index: usize) u64 {
@@ -6598,6 +6885,100 @@ test "fs_node_ops: namespace supervision auto-disables after failure threshold" 
     try std.testing.expect(std.mem.indexOf(u8, status_node.content, "\"reason\":\"max_consecutive_failures\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, health_node.content, "\"enabled\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, health_node.content, "\"last_control_op\":\"auto_disable\"") != null);
+}
+
+test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls and files" {
+    const allocator = std.testing.allocator;
+
+    const runtime_exe, const runtime_args = if (builtin.os.tag == .windows)
+        .{ "cmd.exe", &[_][]const u8{ "/C", "exit 7" } }
+    else
+        .{ "sh", &[_][]const u8{ "-lc", "exit 7" } };
+
+    var src = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = "svc-runtime-roundtrip",
+            .path = "service:runtime-roundtrip",
+            .source_kind = .namespace,
+            .source_id = "service:runtime-roundtrip",
+            .ro = false,
+            .namespace_service = .{
+                .service_id = "runtime-roundtrip",
+                .runtime_kind = .native_proc,
+                .executable_path = runtime_exe,
+                .args = runtime_args,
+                .timeout_ms = 2_000,
+            },
+        },
+    });
+    defer src.deinit();
+
+    const service_idx = src.exportByName("svc-runtime-roundtrip").?;
+    const ns = src.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const config_id = ns.path_to_node.get("/config.json") orelse return error.TestExpectedResponse;
+    const invoke_id = ns.path_to_node.get("/control/invoke.json") orelse return error.TestExpectedResponse;
+    const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const error_id = ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
+
+    try src.namespaceSetFileContent(
+        ns,
+        config_id,
+        "{\"supervision\":{\"max_consecutive_failures\":2,\"cooldown_ms\":12345,\"auto_disable_on_threshold\":false}}",
+    );
+    try src.maybeInvokeNamespaceServiceControl(service_idx, ns, config_id);
+    try src.namespaceSetFileContent(ns, invoke_id, "{\"ping\":\"runtime\"}");
+    try src.maybeInvokeNamespaceServiceControl(service_idx, ns, invoke_id);
+
+    const status_before = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
+    const error_before = ns.nodes.get(error_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, status_before.content, "\"state\":\"error\"") != null);
+    try std.testing.expect(error_before.content.len > 0);
+
+    const snapshot = try src.exportNamespaceRuntimeStateJson(allocator);
+    defer allocator.free(snapshot);
+    try std.testing.expect(src.takeNamespaceRuntimeStateDirty());
+    try std.testing.expect(!src.takeNamespaceRuntimeStateDirty());
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"service_id\":\"runtime-roundtrip\"") != null);
+
+    var dst = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = "svc-runtime-roundtrip",
+            .path = "service:runtime-roundtrip",
+            .source_kind = .namespace,
+            .source_id = "service:runtime-roundtrip",
+            .ro = false,
+            .namespace_service = .{
+                .service_id = "runtime-roundtrip",
+                .runtime_kind = .native_proc,
+                .executable_path = runtime_exe,
+                .args = runtime_args,
+                .timeout_ms = 2_000,
+            },
+        },
+    });
+    defer dst.deinit();
+
+    try dst.restoreNamespaceRuntimeStateJson(snapshot);
+    try std.testing.expect(!dst.takeNamespaceRuntimeStateDirty());
+
+    const restored_runtime = dst.namespace_service_runtime.get(service_idx) orelse return error.TestExpectedResponse;
+    const restored_stats = dst.namespace_service_stats.get(service_idx) orelse return error.TestExpectedResponse;
+    try std.testing.expect(restored_runtime.enabled);
+    try std.testing.expectEqual(@as(u64, 2), restored_runtime.supervision.max_consecutive_failures);
+    try std.testing.expectEqual(@as(u64, 12345), restored_runtime.supervision.cooldown_ms);
+    try std.testing.expect(restored_stats.invokes_total >= 1);
+    try std.testing.expect(restored_stats.failures_total >= 1);
+
+    const restored_ns = dst.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const restored_status_id = restored_ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const restored_error_id = restored_ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
+    const restored_health_id = restored_ns.path_to_node.get("/health.json") orelse return error.TestExpectedResponse;
+    const restored_status = restored_ns.nodes.get(restored_status_id) orelse return error.TestExpectedResponse;
+    const restored_error = restored_ns.nodes.get(restored_error_id) orelse return error.TestExpectedResponse;
+    const restored_health = restored_ns.nodes.get(restored_health_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, restored_status.content, "\"state\":\"error\"") != null);
+    try std.testing.expect(restored_error.content.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, restored_health.content, "\"service_id\":\"runtime-roundtrip\"") != null);
 }
 
 test "fs_node_ops: gdrive scaffold supports read path and guards writes" {
