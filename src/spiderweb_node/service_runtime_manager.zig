@@ -2,6 +2,7 @@ const std = @import("std");
 const namespace_driver = @import("namespace_driver.zig");
 
 const supervisor_loop_sleep_ms: u64 = 25;
+const runtime_stats_last_error_max: usize = 256;
 
 pub const ServiceSupervisionPolicy = struct {
     health_check_interval_ms: u64 = 5_000,
@@ -18,6 +19,15 @@ pub const ServiceRuntimeStats = struct {
     restarts_total: u64,
     consecutive_failures: u32,
     backoff_until_ms: i64,
+    last_transition_ms: i64,
+    last_healthy_ms: i64,
+    last_error_len: usize = 0,
+    last_error_buf: [runtime_stats_last_error_max]u8 = [_]u8{0} ** runtime_stats_last_error_max,
+
+    pub fn lastError(self: *const ServiceRuntimeStats) ?[]const u8 {
+        if (self.last_error_len == 0) return null;
+        return self.last_error_buf[0..self.last_error_len];
+    }
 };
 
 pub const ParsedServiceRegistration = struct {
@@ -52,6 +62,8 @@ pub const RuntimeManager = struct {
         backoff_until_ms: i64 = 0,
         last_start_ms: i64 = 0,
         last_stop_ms: i64 = 0,
+        last_transition_ms: i64 = 0,
+        last_healthy_ms: i64 = 0,
         last_error: ?[]u8 = null,
 
         fn deinit(self: *ManagedService, allocator: std.mem.Allocator) void {
@@ -73,14 +85,24 @@ pub const RuntimeManager = struct {
         }
 
         fn runtimeStats(self: *const ManagedService) ServiceRuntimeStats {
-            return .{
+            var stats: ServiceRuntimeStats = .{
                 .enabled = self.enabled,
                 .running = self.running,
                 .start_attempts_total = self.start_attempts_total,
                 .restarts_total = self.restarts_total,
                 .consecutive_failures = self.consecutive_failures,
                 .backoff_until_ms = self.backoff_until_ms,
+                .last_transition_ms = self.last_transition_ms,
+                .last_healthy_ms = self.last_healthy_ms,
             };
+            if (self.last_error) |value| {
+                const copy_len = @min(value.len, runtime_stats_last_error_max);
+                if (copy_len > 0) {
+                    @memcpy(stats.last_error_buf[0..copy_len], value[0..copy_len]);
+                    stats.last_error_len = copy_len;
+                }
+            }
+            return stats;
         }
     };
 
@@ -236,7 +258,7 @@ pub const RuntimeManager = struct {
 
         service.start_attempts_total +%= 1;
         driver.start(self.allocator) catch |err| {
-            service.descriptor.state = .degraded;
+            self.setServiceStateLocked(service, .degraded, now_ms);
             service.running = false;
             service.setLastError(self.allocator, @errorName(err));
             service.consecutive_failures +%= 1;
@@ -252,10 +274,11 @@ pub const RuntimeManager = struct {
         }
 
         service.running = true;
-        service.descriptor.state = .online;
+        self.setServiceStateLocked(service, .online, now_ms);
         service.consecutive_failures = 0;
         service.backoff_until_ms = 0;
         service.last_start_ms = now_ms;
+        service.last_healthy_ms = now_ms;
         service.next_health_check_ms = now_ms + @as(i64, @intCast(service.policy.health_check_interval_ms));
         service.clearLastError(self.allocator);
     }
@@ -273,18 +296,17 @@ pub const RuntimeManager = struct {
         }
         service.running = false;
         service.last_stop_ms = now_ms;
-        service.descriptor.state = target_state;
+        self.setServiceStateLocked(service, target_state, now_ms);
     }
 
     fn applyFailurePolicyLocked(self: *RuntimeManager, service: *ManagedService, now_ms: i64) void {
-        _ = self;
         if (service.policy.auto_disable_on_failures and
             service.policy.max_consecutive_failures > 0 and
             service.consecutive_failures >= service.policy.max_consecutive_failures)
         {
             service.enabled = false;
             service.backoff_until_ms = 0;
-            service.descriptor.state = .offline;
+            self.setServiceStateLocked(service, .offline, now_ms);
             return;
         }
 
@@ -308,10 +330,23 @@ pub const RuntimeManager = struct {
         self.stopServiceLocked(service, now_ms, state);
         self.applyFailurePolicyLocked(service, now_ms);
         if (!service.enabled) {
-            service.descriptor.state = .offline;
+            self.setServiceStateLocked(service, .offline, now_ms);
         } else {
-            service.descriptor.state = .degraded;
+            self.setServiceStateLocked(service, .degraded, now_ms);
         }
+    }
+
+    fn setServiceStateLocked(
+        self: *RuntimeManager,
+        service: *ManagedService,
+        next: namespace_driver.ServiceState,
+        now_ms: i64,
+    ) void {
+        _ = self;
+        if (service.descriptor.state != next or service.last_transition_ms == 0) {
+            service.last_transition_ms = now_ms;
+        }
+        service.descriptor.state = next;
     }
 
     fn superviseTick(self: *RuntimeManager) void {
@@ -344,7 +379,10 @@ pub const RuntimeManager = struct {
             };
 
             if (health.state == .online) {
-                service.descriptor.state = .online;
+                if (service.descriptor.state != .online or service.last_healthy_ms == 0) {
+                    service.last_healthy_ms = now_ms;
+                }
+                self.setServiceStateLocked(service, .online, now_ms);
                 service.consecutive_failures = 0;
                 service.clearLastError(self.allocator);
                 continue;
@@ -613,6 +651,12 @@ const MockDriver = struct {
         };
     }
 
+    fn setHealthMode(self: *MockDriver, mode: HealthMode) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.health_mode = mode;
+    }
+
     fn startFn(ctx: *anyopaque, allocator: std.mem.Allocator) anyerror!void {
         _ = allocator;
         const self: *MockDriver = @ptrCast(@alignCast(ctx));
@@ -737,4 +781,55 @@ test "service_runtime_manager: auto disables after consecutive failures" {
 
     const snap = mock.snapshot();
     try std.testing.expect(snap.stop_calls >= 1);
+}
+
+test "service_runtime_manager: runtime stats include transition and recovery details" {
+    const allocator = std.testing.allocator;
+    var manager = RuntimeManager.init(allocator);
+    defer manager.deinit();
+
+    var descriptor = try makeTestDescriptor(allocator, "svc-transition-details");
+    defer descriptor.deinit(allocator);
+
+    var mock = MockDriver{ .health_mode = .offline };
+    try manager.registerWithPolicy(&descriptor, mock.handle(), .{
+        .health_check_interval_ms = 10,
+        .restart_backoff_ms = 5,
+        .restart_backoff_max_ms = 20,
+    });
+
+    try manager.startAll();
+    defer manager.stopAll();
+
+    const degraded_deadline = std.time.milliTimestamp() + 2_000;
+    var degraded_stats: ?ServiceRuntimeStats = null;
+    while (std.time.milliTimestamp() < degraded_deadline) {
+        const stats = manager.serviceRuntimeStats("svc-transition-details") orelse return error.TestExpectedResponse;
+        const state = manager.serviceState("svc-transition-details") orelse return error.TestExpectedResponse;
+        if (state == .degraded and stats.lastError() != null and stats.last_transition_ms > 0) {
+            degraded_stats = stats;
+            break;
+        }
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    try std.testing.expect(degraded_stats != null);
+    const degraded = degraded_stats.?;
+    const degraded_last_error = degraded.lastError() orelse return error.TestExpectedResponse;
+    try std.testing.expect(degraded_last_error.len > 0);
+
+    mock.setHealthMode(.online);
+
+    const recovered_deadline = std.time.milliTimestamp() + 2_000;
+    var recovered_stats: ?ServiceRuntimeStats = null;
+    while (std.time.milliTimestamp() < recovered_deadline) {
+        const stats = manager.serviceRuntimeStats("svc-transition-details") orelse return error.TestExpectedResponse;
+        const state = manager.serviceState("svc-transition-details") orelse return error.TestExpectedResponse;
+        if (state == .online and stats.lastError() == null and stats.last_healthy_ms >= degraded.last_transition_ms) {
+            recovered_stats = stats;
+            break;
+        }
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    try std.testing.expect(recovered_stats != null);
+    try std.testing.expect(recovered_stats.?.last_transition_ms >= degraded.last_transition_ms);
 }

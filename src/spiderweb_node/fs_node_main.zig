@@ -2117,7 +2117,23 @@ fn renderServiceJsonWithRuntimeProbeState(
     try jsonObjectPutI64(&supervision_status, "restarts_total", clampU64ToI64(stats.restarts_total));
     try jsonObjectPutI64(&supervision_status, "consecutive_failures", stats.consecutive_failures);
     try jsonObjectPutI64(&supervision_status, "backoff_until_ms", stats.backoff_until_ms);
-    try jsonObjectPutI64(&supervision_status, "updated_at_ms", std.time.milliTimestamp());
+    try jsonObjectPutI64(&supervision_status, "last_transition_ms", stats.last_transition_ms);
+    if (stats.last_healthy_ms > 0) {
+        try jsonObjectPutI64(&supervision_status, "last_healthy_ms", stats.last_healthy_ms);
+    } else {
+        try jsonObjectPutNull(&supervision_status, "last_healthy_ms");
+    }
+    if (stats.lastError()) |last_error| {
+        try jsonObjectPutString(&supervision_status, "last_error", last_error);
+    } else {
+        try jsonObjectPutNull(&supervision_status, "last_error");
+    }
+    const updated_at_ms: i64 = @max(stats.last_transition_ms, stats.last_healthy_ms);
+    if (updated_at_ms > 0) {
+        try jsonObjectPutI64(&supervision_status, "updated_at_ms", updated_at_ms);
+    } else {
+        try jsonObjectPutNull(&supervision_status, "updated_at_ms");
+    }
     try jsonObjectPutValue(runtime_obj, "supervision_status", .{ .object = supervision_status });
 
     const rendered = try std.json.Stringify.valueAlloc(temp_allocator, parsed.value, .{});
@@ -2148,6 +2164,10 @@ fn jsonObjectPutString(obj: *std.json.ObjectMap, key: []const u8, value: []const
 
 fn jsonObjectPutBool(obj: *std.json.ObjectMap, key: []const u8, value: bool) !void {
     try jsonObjectPutValue(obj, key, .{ .bool = value });
+}
+
+fn jsonObjectPutNull(obj: *std.json.ObjectMap, key: []const u8) !void {
+    try jsonObjectPutValue(obj, key, .null);
 }
 
 fn jsonObjectPutI64(obj: *std.json.ObjectMap, key: []const u8, value: anytype) !void {
@@ -3631,10 +3651,12 @@ test "fs_node_main: runtime probe state overlays service catalog json" {
     try std.testing.expect(first_overlay);
     try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"supervision_status\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"state\":\"online\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"last_healthy_ms\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"last_error\":null") != null);
 
     try temp.dir.deleteFile("probe-driver");
-    const deadline = std.time.milliTimestamp() + 2_000;
-    while (std.time.milliTimestamp() < deadline) {
+    const degraded_deadline = std.time.milliTimestamp() + 2_000;
+    while (std.time.milliTimestamp() < degraded_deadline) {
         const state = runtime_manager.serviceState("svc-runtime-overlay") orelse return error.TestExpectedResponse;
         if (state != .online) break;
         std.Thread.sleep(20 * std.time.ns_per_ms);
@@ -3647,4 +3669,33 @@ test "fs_node_main: runtime probe state overlays service catalog json" {
     );
     try std.testing.expect(degraded_overlay);
     try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"state\":\"degraded\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"last_error\":\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"last_transition_ms\":") != null);
+
+    try temp.dir.writeFile(.{
+        .sub_path = "probe-driver",
+        .data = "#!/bin/sh\necho ok\n",
+    });
+    const recover_deadline = std.time.milliTimestamp() + 2_000;
+    while (std.time.milliTimestamp() < recover_deadline) {
+        const state = runtime_manager.serviceState("svc-runtime-overlay") orelse return error.TestExpectedResponse;
+        if (state == .online) break;
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+
+    const recovered_overlay = try applyRuntimeManagerStateToServiceRegistry(
+        allocator,
+        &registry,
+        &runtime_manager,
+    );
+    try std.testing.expect(recovered_overlay);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"state\":\"online\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, registry.extra_services.items[0].service_json, "\"last_error\":null") != null);
+
+    const no_churn_overlay = try applyRuntimeManagerStateToServiceRegistry(
+        allocator,
+        &registry,
+        &runtime_manager,
+    );
+    try std.testing.expect(!no_churn_overlay);
 }
