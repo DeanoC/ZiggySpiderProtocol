@@ -28,12 +28,13 @@ pub fn load(
     config: WasmPluginConfig,
 ) !WasmPluginHandle {
     if (config.module_path.len == 0) return error.InvalidPluginConfig;
-    if (config.entrypoint.len == 0) return error.InvalidPluginConfig;
+    if (!isSafeHostPath(config.module_path)) return error.InvalidPluginConfig;
+    if (!isSafeEntrypoint(config.entrypoint)) return error.InvalidPluginConfig;
     var handle = WasmPluginHandle{
         .module_path = try allocator.dupe(u8, config.module_path),
         .entrypoint = try allocator.dupe(u8, config.entrypoint),
         .runner_path = if (config.runner_path) |value| blk: {
-            if (value.len == 0) return error.InvalidPluginConfig;
+            if (value.len == 0 or !isSafeHostPath(value)) return error.InvalidPluginConfig;
             break :blk try allocator.dupe(u8, value);
         } else null,
     };
@@ -45,9 +46,29 @@ pub fn load(
     return handle;
 }
 
+fn isSafeHostPath(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (ch == 0 or ch == '\n' or ch == '\r') return false;
+    }
+    return true;
+}
+
+fn isSafeEntrypoint(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (std.ascii.isAlphanumeric(ch)) continue;
+        if (ch == '_' or ch == '-' or ch == '.' or ch == ':') continue;
+        return false;
+    }
+    return true;
+}
+
 test "plugin_loader_wasm: validates module path" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(error.InvalidPluginConfig, load(allocator, .{ .module_path = "" }));
+    try std.testing.expectError(error.InvalidPluginConfig, load(allocator, .{ .module_path = "plugins/\nmodule.wasm" }));
+    try std.testing.expectError(error.InvalidPluginConfig, load(allocator, .{ .module_path = "plugins/module.wasm", .entrypoint = "bad name" }));
 }
 
 test "plugin_loader_wasm: captures module and entrypoint" {

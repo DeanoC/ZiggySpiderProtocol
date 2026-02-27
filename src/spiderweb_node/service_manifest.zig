@@ -40,7 +40,7 @@ pub fn loadServiceManifestFile(
     defer freeStringList(allocator, &endpoints);
     try parseEndpoints(allocator, parsed.value.object, node_id, service_id, &endpoints);
 
-    var mounts_json = try parseMountsJson(allocator, parsed.value.object, node_id, service_id, state, endpoints.items[0]);
+    const mounts_json = try parseMountsJson(allocator, parsed.value.object, node_id, service_id, state, endpoints.items[0]);
     defer allocator.free(mounts_json);
 
     const capabilities_json = try parseOptionalObjectJsonOrDefault(allocator, parsed.value.object, "capabilities", "{}");
@@ -273,7 +273,7 @@ fn dupOptionalString(
 ) !?[]u8 {
     const value = getOptionalString(obj, key) orelse return null;
     if (value.len == 0 or value.len > max_len) return error.InvalidManifest;
-    return allocator.dupe(u8, value);
+    return try allocator.dupe(u8, value);
 }
 
 fn getRequiredIdentifier(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {

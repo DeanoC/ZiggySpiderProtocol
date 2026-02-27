@@ -32,6 +32,9 @@ Service manifests that should expose a live executable namespace must include:
 If the runtime-specific path field is omitted, the service can still be
 published in the catalog, but no executable namespace export is created.
 
+For `native_inproc`, when `runtime.abi` is present it must be
+`"namespace-driver-v1"`.
+
 ## Namespace Projection
 
 For each executable service, the node runtime creates a namespace export with:
@@ -88,6 +91,11 @@ Runtime control:
 - write JSON object payload to `config.json`
   - persists as service runtime config state
   - reflected in `health.json` metadata
+  - supports optional lifecycle supervision policy:
+    - `supervision.max_consecutive_failures` (`u64`, default `0` = disabled)
+    - `supervision.max_consecutive_timeouts` (`u64`, default `0` = disabled)
+    - `supervision.cooldown_ms` (`u64`, default `0`)
+    - `supervision.auto_disable_on_threshold` (`bool`, default `true`)
 
 Result mapping:
 
@@ -99,6 +107,14 @@ Result mapping:
   - `last_error.txt` = process `stderr` (or fallback error text)
   - `status.json.state` = `"error"`
   - `status.json.exit_code` populated
+
+Supervision behavior:
+
+- if `supervision.cooldown_ms > 0`, failed invokes place runtime into a backoff
+  window; invoke attempts during this window return `EAGAIN` and
+  `status.json.state = "backoff"`
+- if threshold policy is enabled and exceeded, runtime auto-disables:
+  `status.json.state = "offline"` and `health.json.enabled = false`
 
 Timeout behavior:
 
@@ -116,6 +132,7 @@ Timeout behavior:
 - `failures_total`
 - `consecutive_failures`
 - `timeouts_total`
+- `consecutive_timeouts`
 - `last_duration_ms`
 - `last_started_ms`
 - `last_finished_ms`
@@ -128,6 +145,9 @@ Timeout behavior:
 - `last_control_op`
 - `last_control_ms`
 - `restarts_total`
+- `cooldown_until_ms`
+- `cooldown_remaining_ms`
+- `supervision` policy snapshot
 - plus invocation summary mirrors from `metrics.json`
 
 Writes trigger FS invalidation events on updated files.

@@ -24,7 +24,6 @@ const fsrpc_node_proto_id: i64 = 2;
 const control_node_not_found_code = "node_not_found";
 const control_node_auth_failed_code = "node_auth_failed";
 const inproc_helper_max_io_bytes: usize = 1024 * 1024;
-const inproc_helper_invoke_symbol = "spiderweb_driver_v1_invoke_json";
 
 const PairMode = enum {
     invite,
@@ -718,19 +717,10 @@ fn runInternalInprocInvoke(allocator: std.mem.Allocator, args: []const []const u
     const lib_path = library_path orelse return error.InvalidArguments;
     var lib = try std.DynLib.open(lib_path);
     defer lib.close();
-
-    const InprocInvokeFn = *const fn (
-        payload_ptr: [*]const u8,
-        payload_len: usize,
-        stdout_ptr: [*]u8,
-        stdout_cap: usize,
-        stdout_len: *usize,
-        stderr_ptr: [*]u8,
-        stderr_cap: usize,
-        stderr_len: *usize,
-    ) callconv(.c) i32;
-
-    const invoke_fn = lib.lookup(InprocInvokeFn, inproc_helper_invoke_symbol) orelse return error.MissingSymbol;
+    const invoke_fn = lib.lookup(
+        plugin_loader_native.InprocInvokeFn,
+        plugin_loader_native.default_invoke_symbol,
+    ) orelse return error.MissingSymbol;
     const payload = try std.fs.File.stdin().readToEndAlloc(allocator, inproc_helper_max_io_bytes);
     defer allocator.free(payload);
 
@@ -1035,6 +1025,11 @@ fn validateServiceRuntimeConfig(
     }
 
     if (std.mem.eql(u8, runtime_type, "native_inproc")) {
+        if (runtime.object.get("abi")) |value| {
+            if (value != .string or !std.mem.eql(u8, value.string, plugin_loader_native.stable_abi_name)) {
+                return error.InvalidArguments;
+            }
+        }
         const library_path = blk: {
             if (runtime.object.get("library_path")) |value| {
                 if (value != .string) return error.InvalidArguments;
@@ -2457,6 +2452,17 @@ test "fs_node_main: runtime validator rejects unknown runtime type" {
         validateServiceRuntimeConfig(
             allocator,
             "{\"service_id\":\"bad\",\"kind\":\"custom\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/custom\"],\"runtime\":{\"type\":\"mystery\"}}",
+        ),
+    );
+}
+
+test "fs_node_main: runtime validator rejects unsupported native_inproc abi marker" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.InvalidArguments,
+        validateServiceRuntimeConfig(
+            allocator,
+            "{\"service_id\":\"camera\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_inproc\",\"abi\":\"legacy-v0\"}}",
         ),
     );
 }
