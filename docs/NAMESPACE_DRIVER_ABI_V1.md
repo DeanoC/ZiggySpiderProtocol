@@ -47,8 +47,13 @@ Projected files:
 - `status.json`
 - `metrics.json`
 - `last_error.txt`
+- `config.json` (writable JSON object)
+- `health.json`
 - `control/invoke.json` (writable)
 - `control/reset` (writable)
+- `control/enable` (writable)
+- `control/disable` (writable)
+- `control/restart` (writable)
 
 ## Invoke Contract
 
@@ -66,6 +71,23 @@ Operational reset:
   - `status.json` -> `{"state":"idle"}`
   - `metrics.json` unchanged
   - `last_error.txt` -> empty string
+
+Runtime control:
+
+- write any payload to `control/disable`
+  - disables runtime invocation
+  - `status.json.state` becomes `"offline"`
+  - invokes return `EPERM`
+- write any payload to `control/enable`
+  - re-enables invocation
+  - `status.json.state` becomes `"idle"`
+- write any payload to `control/restart`
+  - increments restart counter
+  - clears `last_error.txt`
+  - `status.json` becomes `"idle"` (or `"offline"` when disabled)
+- write JSON object payload to `config.json`
+  - persists as service runtime config state
+  - reflected in `health.json` metadata
 
 Result mapping:
 
@@ -98,6 +120,15 @@ Timeout behavior:
 - `last_started_ms`
 - `last_finished_ms`
 - `last_exit_code`
+
+`health.json` tracks runtime operational state:
+
+- `state` (`online` | `offline` | `degraded`)
+- `enabled` (`bool`)
+- `last_control_op`
+- `last_control_ms`
+- `restarts_total`
+- plus invocation summary mirrors from `metrics.json`
 
 Writes trigger FS invalidation events on updated files.
 

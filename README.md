@@ -24,6 +24,8 @@ Shared Spiderweb protocol parsing/building utilities for Zig-based server and cl
       - `native_proc` (process stdin/stdout contract with hard timeout kill)
       - `native_inproc` (dynamic library invoke symbol via isolated helper process with hard timeout kill)
       - `wasm` (runner-backed WASI execution with hard timeout kill)
+    - runtime control surface files for service namespaces:
+      - `control/enable`, `control/disable`, `control/restart`, `config.json`, `health.json`
   - Namespace executable ABI doc:
     - `docs/NAMESPACE_DRIVER_ABI_V1.md`
 

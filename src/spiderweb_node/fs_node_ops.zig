@@ -31,7 +31,7 @@ const namespace_chat_schema_json =
 const namespace_chat_meta_json =
     "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
 const namespace_service_schema_json =
-    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\"}";
+    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\"}";
 const namespace_service_wasm_default_runner: []const u8 = "wasmtime";
 
 const max_read_bytes: u32 = 1024 * 1024;
@@ -268,6 +268,28 @@ const NamespaceServiceRuntimeStats = struct {
     last_exit_code: i32 = 0,
 };
 
+const NamespaceServiceRuntimeControl = struct {
+    enabled: bool = true,
+    restarts_total: u64 = 0,
+    last_control_ms: i64 = 0,
+    last_control_op: []u8,
+    config_json: []u8,
+
+    fn init(allocator: std.mem.Allocator) !NamespaceServiceRuntimeControl {
+        return .{
+            .enabled = true,
+            .last_control_op = try allocator.dupe(u8, "init"),
+            .config_json = try allocator.dupe(u8, "{}"),
+        };
+    }
+
+    fn deinit(self: *NamespaceServiceRuntimeControl, allocator: std.mem.Allocator) void {
+        allocator.free(self.last_control_op);
+        allocator.free(self.config_json);
+        self.* = undefined;
+    }
+};
+
 const GdriveNode = struct {
     export_index: usize,
     parent_node_id: ?u64,
@@ -355,6 +377,7 @@ pub const NodeOps = struct {
     namespace_handles: std.AutoHashMapUnmanaged(u64, NamespaceOpenHandle) = .{},
     namespace_exports: std.AutoHashMapUnmanaged(usize, NamespaceExport) = .{},
     namespace_service_stats: std.AutoHashMapUnmanaged(usize, NamespaceServiceRuntimeStats) = .{},
+    namespace_service_runtime: std.AutoHashMapUnmanaged(usize, NamespaceServiceRuntimeControl) = .{},
     gdrive_handles: std.AutoHashMapUnmanaged(u64, GdriveOpenHandle) = .{},
     gdrive_write_handles: std.AutoHashMapUnmanaged(u64, GdriveWriteHandle) = .{},
     gdrive_nodes: std.AutoHashMapUnmanaged(u64, GdriveNode) = .{},
@@ -420,6 +443,9 @@ pub const NodeOps = struct {
         while (namespace_it.next()) |ns_export| ns_export.deinit(self.allocator);
         self.namespace_exports.deinit(self.allocator);
         self.namespace_service_stats.deinit(self.allocator);
+        var runtime_it = self.namespace_service_runtime.valueIterator();
+        while (runtime_it.next()) |runtime| runtime.deinit(self.allocator);
+        self.namespace_service_runtime.deinit(self.allocator);
         self.gdrive_handles.deinit(self.allocator);
         var gdrive_write_it = self.gdrive_write_handles.valueIterator();
         while (gdrive_write_it.next()) |handle| {
@@ -764,8 +790,9 @@ pub const NodeOps = struct {
             const control_dir = try self.namespaceCreateNode(export_index, &ns, chat_dir, "control", .dir, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "input", .file, true, "");
         } else if (std.mem.startsWith(u8, export_cfg.source_id, "service:")) {
-            const service_help = if (export_cfg.namespace_service) |service|
-                if (service.help_md) |value|
+            const maybe_service_cfg = export_cfg.namespace_service;
+            const service_help = if (maybe_service_cfg) |service_cfg|
+                if (service_cfg.help_md) |value|
                     value
                 else
                     "Namespace service driver.\nWrite JSON to control/invoke.json.\nRead result.json and status.json.\n"
@@ -777,9 +804,22 @@ pub const NodeOps = struct {
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "last_error.txt", .file, false, "");
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "status.json", .file, false, "{\"state\":\"idle\"}");
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "metrics.json", .file, false, "{\"invokes_total\":0,\"failures_total\":0,\"consecutive_failures\":0,\"timeouts_total\":0}");
+            const runtime = try self.namespaceServiceRuntimePtr(export_index);
+            if (maybe_service_cfg == null) runtime.enabled = false;
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "config.json", .file, true, runtime.config_json);
+            const stats = try self.namespaceServiceStatsPtr(export_index);
+            const health_json = if (maybe_service_cfg) |service_cfg|
+                try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats)
+            else
+                try self.allocator.dupe(u8, "{\"state\":\"offline\",\"enabled\":false,\"service_id\":\"unbound\",\"runtime\":\"none\"}");
+            defer self.allocator.free(health_json);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "health.json", .file, false, health_json);
             const control_dir = try self.namespaceCreateNode(export_index, &ns, root.id, "control", .dir, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "invoke.json", .file, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "reset", .file, true, "");
+            _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "enable", .file, true, "");
+            _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "disable", .file, true, "");
+            _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "restart", .file, true, "");
         }
 
         if (try self.namespace_exports.fetchPut(self.allocator, export_index, ns)) |existing| {
@@ -1448,17 +1488,101 @@ pub const NodeOps = struct {
         const error_id = namespaceLookupChildNode(ns, ns.root_id, "last_error.txt") orelse return error.FileNotFound;
         const status_id = namespaceLookupChildNode(ns, ns.root_id, "status.json") orelse return error.FileNotFound;
         const metrics_id = namespaceLookupChildNode(ns, ns.root_id, "metrics.json") orelse return error.FileNotFound;
+        const config_id = namespaceLookupChildNode(ns, ns.root_id, "config.json") orelse return error.FileNotFound;
+        const health_id = namespaceLookupChildNode(ns, ns.root_id, "health.json") orelse return error.FileNotFound;
         const stats = try self.namespaceServiceStatsPtr(export_index);
-        if (std.mem.eql(u8, node.path, "/control/reset")) {
-            try self.namespaceSetFileContent(ns, result_id, "{\"state\":\"idle\"}");
+        const runtime = try self.namespaceServiceRuntimePtr(export_index);
+        const now_ms: i64 = std.time.milliTimestamp();
+
+        if (std.mem.eql(u8, node.path, "/config.json")) {
+            const payload = std.mem.trim(u8, node.content, " \t\r\n");
+            if (payload.len == 0) {
+                const next_config = try self.allocator.dupe(u8, "{}");
+                self.allocator.free(runtime.config_json);
+                runtime.config_json = next_config;
+            } else {
+                var parsed_config = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch return error.InvalidPayload;
+                defer parsed_config.deinit();
+                if (parsed_config.value != .object) return error.InvalidPayload;
+                const rendered = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(parsed_config.value, .{})});
+                defer self.allocator.free(rendered);
+                const next_config = try self.allocator.dupe(u8, rendered);
+                self.allocator.free(runtime.config_json);
+                runtime.config_json = next_config;
+            }
+
+            try self.namespaceServiceSetControlOp(runtime, "config_update", now_ms);
+            try self.namespaceSetFileContent(ns, config_id, runtime.config_json);
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
+            return;
+        }
+
+        if (std.mem.eql(u8, node.path, "/control/enable")) {
+            runtime.enabled = true;
+            try self.namespaceServiceSetControlOp(runtime, "enable", now_ms);
             try self.namespaceSetFileContent(ns, error_id, "");
             try self.namespaceSetFileContent(ns, status_id, "{\"state\":\"idle\"}");
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
+            return;
+        }
+
+        if (std.mem.eql(u8, node.path, "/control/disable")) {
+            runtime.enabled = false;
+            try self.namespaceServiceSetControlOp(runtime, "disable", now_ms);
+            try self.namespaceSetFileContent(ns, status_id, "{\"state\":\"offline\",\"reason\":\"disabled\"}");
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
+            return;
+        }
+
+        if (std.mem.eql(u8, node.path, "/control/restart")) {
+            runtime.restarts_total +%= 1;
+            try self.namespaceServiceSetControlOp(runtime, "restart", now_ms);
+            try self.namespaceSetFileContent(ns, result_id, "{\"state\":\"idle\"}");
+            try self.namespaceSetFileContent(ns, error_id, "");
+            try self.namespaceSetFileContent(
+                ns,
+                status_id,
+                if (runtime.enabled) "{\"state\":\"idle\"}" else "{\"state\":\"offline\",\"reason\":\"disabled\"}",
+            );
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
+            return;
+        }
+
+        if (std.mem.eql(u8, node.path, "/control/reset")) {
+            try self.namespaceServiceSetControlOp(runtime, "reset", now_ms);
+            try self.namespaceSetFileContent(ns, result_id, "{\"state\":\"idle\"}");
+            try self.namespaceSetFileContent(ns, error_id, "");
+            try self.namespaceSetFileContent(
+                ns,
+                status_id,
+                if (runtime.enabled) "{\"state\":\"idle\"}" else "{\"state\":\"offline\",\"reason\":\"disabled\"}",
+            );
             const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
             defer self.allocator.free(metrics_json);
             try self.namespaceSetFileContent(ns, metrics_id, metrics_json);
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
             return;
         }
         if (!std.mem.eql(u8, node.path, "/control/invoke.json")) return;
+
+        if (!runtime.enabled) {
+            try self.namespaceSetFileContent(ns, error_id, "service runtime disabled");
+            try self.namespaceSetFileContent(ns, status_id, "{\"state\":\"offline\",\"reason\":\"disabled\"}");
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
+            return error.AccessDenied;
+        }
 
         const payload = std.mem.trim(u8, node.content, " \t\r\n");
         if (payload.len == 0) return;
@@ -1522,6 +1646,9 @@ pub const NodeOps = struct {
             const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
             defer self.allocator.free(metrics_json);
             try self.namespaceSetFileContent(ns, metrics_id, metrics_json);
+            const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+            defer self.allocator.free(health_json);
+            try self.namespaceSetFileContent(ns, health_id, health_json);
             return;
         }
 
@@ -1556,6 +1683,9 @@ pub const NodeOps = struct {
         const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
         defer self.allocator.free(metrics_json);
         try self.namespaceSetFileContent(ns, metrics_id, metrics_json);
+        const health_json = try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats);
+        defer self.allocator.free(health_json);
+        try self.namespaceSetFileContent(ns, health_id, health_json);
     }
 
     const ServiceProcessResult = struct {
@@ -1770,6 +1900,37 @@ pub const NodeOps = struct {
         return self.namespace_service_stats.getPtr(export_index).?;
     }
 
+    fn namespaceServiceRuntimePtr(self: *NodeOps, export_index: usize) !*NamespaceServiceRuntimeControl {
+        if (self.namespace_service_runtime.getPtr(export_index)) |runtime| return runtime;
+        var initial = try NamespaceServiceRuntimeControl.init(self.allocator);
+        errdefer initial.deinit(self.allocator);
+        try self.namespace_service_runtime.put(self.allocator, export_index, initial);
+        return self.namespace_service_runtime.getPtr(export_index).?;
+    }
+
+    fn namespaceServiceSetControlOp(
+        self: *NodeOps,
+        runtime: *NamespaceServiceRuntimeControl,
+        op: []const u8,
+        at_ms: i64,
+    ) !void {
+        const next = try self.allocator.dupe(u8, op);
+        self.allocator.free(runtime.last_control_op);
+        runtime.last_control_op = next;
+        runtime.last_control_ms = at_ms;
+    }
+
+    fn namespaceServiceHealthState(
+        self: *NodeOps,
+        runtime: *const NamespaceServiceRuntimeControl,
+        stats: *const NamespaceServiceRuntimeStats,
+    ) []const u8 {
+        _ = self;
+        if (!runtime.enabled) return "offline";
+        if (stats.consecutive_failures > 0) return "degraded";
+        return "online";
+    }
+
     fn renderNamespaceServiceMetricsJson(
         self: *NodeOps,
         stats: *const NamespaceServiceRuntimeStats,
@@ -1778,6 +1939,37 @@ pub const NodeOps = struct {
             self.allocator,
             "{{\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}}",
             .{
+                stats.invokes_total,
+                stats.failures_total,
+                stats.consecutive_failures,
+                stats.timeouts_total,
+                stats.last_duration_ms,
+                stats.last_started_ms,
+                stats.last_finished_ms,
+                stats.last_exit_code,
+            },
+        );
+    }
+
+    fn renderNamespaceServiceHealthJson(
+        self: *NodeOps,
+        service_cfg: *const NamespaceServiceConfig,
+        runtime: *const NamespaceServiceRuntimeControl,
+        stats: *const NamespaceServiceRuntimeStats,
+    ) ![]u8 {
+        const state = self.namespaceServiceHealthState(runtime, stats);
+        return std.fmt.allocPrint(
+            self.allocator,
+            "{{\"state\":\"{s}\",\"enabled\":{},\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"timeout_ms\":{d},\"last_control_op\":\"{s}\",\"last_control_ms\":{d},\"restarts_total\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}}",
+            .{
+                state,
+                runtime.enabled,
+                service_cfg.service_id,
+                service_cfg.runtime_kind.asString(),
+                service_cfg.timeout_ms,
+                runtime.last_control_op,
+                runtime.last_control_ms,
+                runtime.restarts_total,
                 stats.invokes_total,
                 stats.failures_total,
                 stats.consecutive_failures,
@@ -5685,6 +5877,213 @@ test "fs_node_ops: namespace service hard timeout kills process runtime" {
     try std.testing.expect(std.mem.indexOf(u8, status_node.content, "\"state\":\"timeout\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, error_node.content, "timeout_ms") != null);
     try std.testing.expect(std.mem.indexOf(u8, metrics_node.content, "\"timeouts_total\":1") != null);
+}
+
+test "fs_node_ops: namespace service runtime control files manage service state" {
+    const allocator = std.testing.allocator;
+
+    const runtime_exe, const runtime_args = if (builtin.os.tag == .windows)
+        .{ "cmd.exe", &[_][]const u8{ "/C", "more" } }
+    else
+        .{ "sh", &[_][]const u8{ "-lc", "cat" } };
+
+    var node_ops = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = "svc-control",
+            .path = "service:control",
+            .source_kind = .namespace,
+            .source_id = "service:control",
+            .ro = false,
+            .namespace_service = .{
+                .service_id = "control-test",
+                .runtime_kind = .native_proc,
+                .executable_path = runtime_exe,
+                .args = runtime_args,
+                .timeout_ms = 5_000,
+                .help_md = "Control service",
+            },
+        },
+    });
+    defer node_ops.deinit();
+
+    const service_idx = node_ops.exportByName("svc-control").?;
+    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const disable_id = ns.path_to_node.get("/control/disable") orelse return error.TestExpectedResponse;
+    const enable_id = ns.path_to_node.get("/control/enable") orelse return error.TestExpectedResponse;
+    const restart_id = ns.path_to_node.get("/control/restart") orelse return error.TestExpectedResponse;
+    const invoke_id = ns.path_to_node.get("/control/invoke.json") orelse return error.TestExpectedResponse;
+    const config_id = ns.path_to_node.get("/config.json") orelse return error.TestExpectedResponse;
+    const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const health_id = ns.path_to_node.get("/health.json") orelse return error.TestExpectedResponse;
+
+    const open_disable_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":1,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{disable_id},
+    );
+    defer allocator.free(open_disable_json);
+    var open_disable_req = try fs_protocol.parseRequest(allocator, open_disable_json);
+    defer open_disable_req.deinit();
+    var open_disable_result = node_ops.dispatch(open_disable_req);
+    defer open_disable_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_disable_result.err_no);
+
+    var open_disable_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_disable_result.result_json.?, .{});
+    defer open_disable_parsed.deinit();
+    const disable_handle: u64 = @intCast(open_disable_parsed.value.object.get("h").?.integer);
+
+    const write_disable_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":2,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{disable_handle},
+    );
+    defer allocator.free(write_disable_json);
+    var write_disable_req = try fs_protocol.parseRequest(allocator, write_disable_json);
+    defer write_disable_req.deinit();
+    var write_disable_result = node_ops.dispatch(write_disable_req);
+    defer write_disable_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_disable_result.err_no);
+
+    const open_invoke_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":3,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{invoke_id},
+    );
+    defer allocator.free(open_invoke_json);
+    var open_invoke_req = try fs_protocol.parseRequest(allocator, open_invoke_json);
+    defer open_invoke_req.deinit();
+    var open_invoke_result = node_ops.dispatch(open_invoke_req);
+    defer open_invoke_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_invoke_result.err_no);
+
+    var open_invoke_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_invoke_result.result_json.?, .{});
+    defer open_invoke_parsed.deinit();
+    const invoke_handle: u64 = @intCast(open_invoke_parsed.value.object.get("h").?.integer);
+
+    const write_invoke_denied_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":4,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{invoke_handle},
+    );
+    defer allocator.free(write_invoke_denied_json);
+    var write_invoke_denied_req = try fs_protocol.parseRequest(allocator, write_invoke_denied_json);
+    defer write_invoke_denied_req.deinit();
+    var write_invoke_denied_result = node_ops.dispatch(write_invoke_denied_req);
+    defer write_invoke_denied_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.EPERM, write_invoke_denied_result.err_no);
+
+    const status_after_disable = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
+    const health_after_disable = ns.nodes.get(health_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, status_after_disable.content, "\"state\":\"offline\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, health_after_disable.content, "\"enabled\":false") != null);
+
+    const open_enable_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":5,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{enable_id},
+    );
+    defer allocator.free(open_enable_json);
+    var open_enable_req = try fs_protocol.parseRequest(allocator, open_enable_json);
+    defer open_enable_req.deinit();
+    var open_enable_result = node_ops.dispatch(open_enable_req);
+    defer open_enable_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_enable_result.err_no);
+
+    var open_enable_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_enable_result.result_json.?, .{});
+    defer open_enable_parsed.deinit();
+    const enable_handle: u64 = @intCast(open_enable_parsed.value.object.get("h").?.integer);
+
+    const write_enable_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":6,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{enable_handle},
+    );
+    defer allocator.free(write_enable_json);
+    var write_enable_req = try fs_protocol.parseRequest(allocator, write_enable_json);
+    defer write_enable_req.deinit();
+    var write_enable_result = node_ops.dispatch(write_enable_req);
+    defer write_enable_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_enable_result.err_no);
+
+    const write_invoke_enabled_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":7,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{invoke_handle},
+    );
+    defer allocator.free(write_invoke_enabled_json);
+    var write_invoke_enabled_req = try fs_protocol.parseRequest(allocator, write_invoke_enabled_json);
+    defer write_invoke_enabled_req.deinit();
+    var write_invoke_enabled_result = node_ops.dispatch(write_invoke_enabled_req);
+    defer write_invoke_enabled_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_invoke_enabled_result.err_no);
+
+    const status_after_enable = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
+    const health_after_enable = ns.nodes.get(health_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, status_after_enable.content, "\"state\":\"ok\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, health_after_enable.content, "\"enabled\":true") != null);
+
+    const open_config_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":8,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{config_id},
+    );
+    defer allocator.free(open_config_json);
+    var open_config_req = try fs_protocol.parseRequest(allocator, open_config_json);
+    defer open_config_req.deinit();
+    var open_config_result = node_ops.dispatch(open_config_req);
+    defer open_config_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_config_result.err_no);
+
+    var open_config_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_config_result.result_json.?, .{});
+    defer open_config_parsed.deinit();
+    const config_handle: u64 = @intCast(open_config_parsed.value.object.get("h").?.integer);
+
+    const write_config_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":9,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"eyJtb2RlIjoic2FmZSJ9\"}}}}",
+        .{config_handle},
+    );
+    defer allocator.free(write_config_json);
+    var write_config_req = try fs_protocol.parseRequest(allocator, write_config_json);
+    defer write_config_req.deinit();
+    var write_config_result = node_ops.dispatch(write_config_req);
+    defer write_config_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_config_result.err_no);
+
+    const config_node = ns.nodes.get(config_id) orelse return error.TestExpectedResponse;
+    try std.testing.expectEqualStrings("{\"mode\":\"safe\"}", config_node.content);
+
+    const open_restart_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":10,\"op\":\"OPEN\",\"node\":{d},\"a\":{{\"flags\":2}}}}",
+        .{restart_id},
+    );
+    defer allocator.free(open_restart_json);
+    var open_restart_req = try fs_protocol.parseRequest(allocator, open_restart_json);
+    defer open_restart_req.deinit();
+    var open_restart_result = node_ops.dispatch(open_restart_req);
+    defer open_restart_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, open_restart_result.err_no);
+
+    var open_restart_parsed = try std.json.parseFromSlice(std.json.Value, allocator, open_restart_result.result_json.?, .{});
+    defer open_restart_parsed.deinit();
+    const restart_handle: u64 = @intCast(open_restart_parsed.value.object.get("h").?.integer);
+
+    const write_restart_json = try std.fmt.allocPrint(
+        allocator,
+        "{{\"t\":\"req\",\"id\":11,\"op\":\"WRITE\",\"h\":{d},\"a\":{{\"off\":0,\"data_b64\":\"e30=\"}}}}",
+        .{restart_handle},
+    );
+    defer allocator.free(write_restart_json);
+    var write_restart_req = try fs_protocol.parseRequest(allocator, write_restart_json);
+    defer write_restart_req.deinit();
+    var write_restart_result = node_ops.dispatch(write_restart_req);
+    defer write_restart_result.deinit(allocator);
+    try std.testing.expectEqual(fs_protocol.Errno.SUCCESS, write_restart_result.err_no);
+
+    const health_after_restart = ns.nodes.get(health_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, health_after_restart.content, "\"restarts_total\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, health_after_restart.content, "\"last_control_op\":\"restart\"") != null);
 }
 
 test "fs_node_ops: gdrive scaffold supports read path and guards writes" {
