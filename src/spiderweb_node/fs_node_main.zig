@@ -692,6 +692,13 @@ pub fn main() !void {
         };
         unreachable;
     }
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "--internal-terminal-invoke")) {
+        runInternalTerminalInvoke(allocator, args[2..]) catch |err| {
+            std.fs.File.stderr().writer().print("internal terminal invoke failed: {s}\n", .{@errorName(err)}) catch {};
+            std.process.exit(125);
+        };
+        unreachable;
+    }
 
     var bind_addr: []const u8 = "127.0.0.1";
     var port: u16 = 18891;
@@ -722,6 +729,11 @@ pub fn main() !void {
     defer service_manifest_paths.deinit(allocator);
     var services_dirs = std.ArrayListUnmanaged([]const u8){};
     defer services_dirs.deinit(allocator);
+    var terminal_namespace_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &terminal_namespace_exports);
+        terminal_namespace_exports.deinit(allocator);
+    }
     var runtime_namespace_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
     defer {
         deinitNamespaceServiceExportList(allocator, &runtime_namespace_exports);
@@ -834,6 +846,12 @@ pub fn main() !void {
     if (!pair_mode_explicit and invite_token != null) {
         pair_mode = .invite;
     }
+    try buildTerminalNamespaceExports(
+        allocator,
+        terminal_ids.items,
+        args[0],
+        &terminal_namespace_exports,
+    );
 
     const effective_fs_url = if (advertised_fs_url) |value|
         value
@@ -933,10 +951,11 @@ pub fn main() !void {
                 try rebuildEffectiveExportSpecs(
                     allocator,
                     exports.items,
+                    terminal_namespace_exports.items,
                     runtime_namespace_exports.items,
                     &effective_exports,
                 );
-                service_registry.fs_export_count = effective_exports.items.len;
+                service_registry.fs_export_count = countFilesystemExportSpecs(effective_exports.items);
                 service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
                 try shared_service_registry.replaceFrom(&service_registry);
 
@@ -1025,6 +1044,7 @@ pub fn main() !void {
                     .auth_token = control_auth_token,
                 },
                 exports.items,
+                terminal_namespace_exports.items,
                 service_manifest_paths.items,
                 services_dirs.items,
                 &service_registry,
@@ -1073,10 +1093,11 @@ pub fn main() !void {
     try rebuildEffectiveExportSpecs(
         allocator,
         exports.items,
+        terminal_namespace_exports.items,
         runtime_namespace_exports.items,
         &effective_exports,
     );
-    service_registry.fs_export_count = effective_exports.items.len;
+    service_registry.fs_export_count = countFilesystemExportSpecs(effective_exports.items);
     service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
     try shared_service_registry.replaceFrom(&service_registry);
 
@@ -1151,6 +1172,230 @@ fn runInternalInprocInvoke(allocator: std.mem.Allocator, args: []const []const u
     std.process.exit(clamped_exit_code);
 }
 
+fn runInternalTerminalInvoke(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var terminal_id: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--terminal-id")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            terminal_id = args[i];
+        } else {
+            return error.InvalidArguments;
+        }
+    }
+
+    const terminal = terminal_id orelse return error.InvalidArguments;
+    const payload = try std.fs.File.stdin().readToEndAlloc(allocator, inproc_helper_max_io_bytes);
+    defer allocator.free(payload);
+
+    const result_json = try invokeTerminalRequestJson(allocator, terminal, payload);
+    defer allocator.free(result_json);
+    try std.fs.File.stdout().writeAll(result_json);
+    std.process.exit(0);
+}
+
+fn invokeTerminalRequestJson(
+    allocator: std.mem.Allocator,
+    terminal_id: []const u8,
+    payload: []const u8,
+) ![]u8 {
+    const trimmed = std.mem.trim(u8, payload, " \t\r\n");
+    if (trimmed.len == 0) return error.InvalidPayload;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidPayload;
+
+    const root = parsed.value.object;
+    const args_obj = if (root.get("arguments")) |value|
+        if (value == .object) value.object else return error.InvalidPayload
+    else
+        root;
+
+    if (jsonObjectOptionalString(root, "tool_name")) |tool_name| {
+        if (!std.mem.eql(u8, tool_name, "terminal_exec") and
+            !std.mem.eql(u8, tool_name, "shell_exec") and
+            !std.mem.eql(u8, tool_name, "exec"))
+        {
+            return error.InvalidPayload;
+        }
+    }
+
+    const operation = jsonObjectOptionalString(args_obj, "op") orelse
+        jsonObjectOptionalString(args_obj, "operation") orelse
+        jsonObjectOptionalString(root, "op") orelse
+        jsonObjectOptionalString(root, "operation") orelse
+        "exec";
+    if (!std.mem.eql(u8, operation, "exec")) return error.InvalidPayload;
+
+    var argv = std.ArrayListUnmanaged([]const u8){};
+    defer argv.deinit(allocator);
+
+    if (args_obj.get("argv")) |argv_value| {
+        if (argv_value != .array or argv_value.array.items.len == 0) return error.InvalidPayload;
+        for (argv_value.array.items) |item| {
+            if (item != .string or item.string.len == 0) return error.InvalidPayload;
+            try argv.append(allocator, item.string);
+        }
+    }
+
+    if (argv.items.len == 0) {
+        const command = jsonObjectOptionalString(args_obj, "command") orelse return error.InvalidPayload;
+        if (builtin.os.tag == .windows) {
+            try argv.appendSlice(allocator, &.{ "cmd", "/C", command });
+        } else {
+            try argv.appendSlice(allocator, &.{ "/bin/sh", "-lc", command });
+        }
+    }
+
+    const cwd = jsonObjectOptionalString(args_obj, "cwd");
+    const max_output_bytes = terminalInvokeMaxOutputBytes(args_obj);
+
+    const run_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv.items,
+        .cwd = cwd,
+        .max_output_bytes = max_output_bytes,
+    }) catch |run_err| {
+        return renderTerminalInvokeErrorJson(
+            allocator,
+            terminal_id,
+            operation,
+            "launch_failed",
+            @errorName(run_err),
+        );
+    };
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    const exit_code: i32 = switch (run_result.term) {
+        .Exited => |code| code,
+        else => -1,
+    };
+    const term_state = switch (run_result.term) {
+        .Exited => "exited",
+        else => "terminated",
+    };
+
+    const escaped_terminal = try jsonEscape(allocator, terminal_id);
+    defer allocator.free(escaped_terminal);
+    const escaped_op = try jsonEscape(allocator, operation);
+    defer allocator.free(escaped_op);
+    const escaped_term_state = try jsonEscape(allocator, term_state);
+    defer allocator.free(escaped_term_state);
+    const escaped_stdout = try jsonEscape(allocator, run_result.stdout);
+    defer allocator.free(escaped_stdout);
+    const escaped_stderr = try jsonEscape(allocator, run_result.stderr);
+    defer allocator.free(escaped_stderr);
+
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"service\":\"terminal\",\"terminal_id\":\"{s}\",\"operation\":\"{s}\",\"ok\":{s},\"state\":\"{s}\",\"exit_code\":{d},\"stdout\":\"{s}\",\"stderr\":\"{s}\"}}",
+        .{
+            escaped_terminal,
+            escaped_op,
+            if (exit_code == 0) "true" else "false",
+            escaped_term_state,
+            exit_code,
+            escaped_stdout,
+            escaped_stderr,
+        },
+    );
+}
+
+fn renderTerminalInvokeErrorJson(
+    allocator: std.mem.Allocator,
+    terminal_id: []const u8,
+    operation: []const u8,
+    state: []const u8,
+    err_text: []const u8,
+) ![]u8 {
+    const escaped_terminal = try jsonEscape(allocator, terminal_id);
+    defer allocator.free(escaped_terminal);
+    const escaped_op = try jsonEscape(allocator, operation);
+    defer allocator.free(escaped_op);
+    const escaped_state = try jsonEscape(allocator, state);
+    defer allocator.free(escaped_state);
+    const escaped_error = try jsonEscape(allocator, err_text);
+    defer allocator.free(escaped_error);
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"service\":\"terminal\",\"terminal_id\":\"{s}\",\"operation\":\"{s}\",\"ok\":false,\"state\":\"{s}\",\"exit_code\":-1,\"stdout\":\"\",\"stderr\":\"{s}\"}}",
+        .{ escaped_terminal, escaped_op, escaped_state, escaped_error },
+    );
+}
+
+fn terminalInvokeMaxOutputBytes(args_obj: std.json.ObjectMap) usize {
+    const default_bytes: usize = 128 * 1024;
+    const max_bytes: usize = 1024 * 1024;
+    const raw = jsonObjectOptionalU64(args_obj, "max_output_bytes") orelse return default_bytes;
+    const bounded = @min(raw, @as(u64, max_bytes));
+    if (bounded == 0) return default_bytes;
+    return @intCast(bounded);
+}
+
+fn buildTerminalNamespaceExports(
+    allocator: std.mem.Allocator,
+    terminal_ids: []const []const u8,
+    self_executable_path: []const u8,
+    out: *std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned),
+) !void {
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+
+    for (terminal_ids) |terminal_id| {
+        if (terminal_id.len == 0) return error.InvalidArguments;
+        if (seen.contains(terminal_id)) continue;
+        try seen.put(allocator, terminal_id, {});
+
+        const service_id = try std.fmt.allocPrint(allocator, "terminal-{s}", .{terminal_id});
+        errdefer allocator.free(service_id);
+        const endpoint = try std.fmt.allocPrint(allocator, "/terminal/{s}", .{terminal_id});
+        errdefer allocator.free(endpoint);
+        const source_id = try std.fmt.allocPrint(allocator, "service:{s}", .{service_id});
+        errdefer allocator.free(source_id);
+        const desc = try std.fmt.allocPrint(allocator, "Terminal namespace service ({s})", .{terminal_id});
+        errdefer allocator.free(desc);
+
+        var spec = NamespaceServiceExportSpecOwned{
+            .name = service_id,
+            .path = endpoint,
+            .source_id = source_id,
+            .desc = desc,
+            .service_id = try allocator.dupe(u8, service_id),
+            .runtime_kind = .native_proc,
+            .executable_path = try allocator.dupe(u8, self_executable_path),
+            .timeout_ms = 30_000,
+            .help_md = try allocator.dupe(
+                u8,
+                "Terminal namespace driver.\nWrite JSON payloads to control/invoke.json with command or argv.",
+            ),
+        };
+        errdefer spec.deinit(allocator);
+        try spec.args.append(allocator, try allocator.dupe(u8, "--internal-terminal-invoke"));
+        try spec.args.append(allocator, try allocator.dupe(u8, "--terminal-id"));
+        try spec.args.append(allocator, try allocator.dupe(u8, terminal_id));
+        try out.append(allocator, spec);
+    }
+}
+
+fn jsonObjectOptionalString(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = obj.get(key) orelse return null;
+    if (value != .string or value.string.len == 0) return null;
+    return value.string;
+}
+
+fn jsonObjectOptionalU64(obj: std.json.ObjectMap, key: []const u8) ?u64 {
+    const value = obj.get(key) orelse return null;
+    return switch (value) {
+        .integer => if (value.integer >= 0) @intCast(value.integer) else null,
+        else => null,
+    };
+}
+
 fn parsePairMode(raw: []const u8) ?PairMode {
     if (std.mem.eql(u8, raw, "invite")) return .invite;
     if (std.mem.eql(u8, raw, "request")) return .request;
@@ -1169,9 +1414,23 @@ fn parseLabelArg(raw: []const u8) !node_capability_providers.NodeLabelArg {
 fn countRwExportSpecs(specs: []const fs_node_ops.ExportSpec) usize {
     var rw: usize = 0;
     for (specs) |spec| {
+        if (spec.source_kind) |source_kind| {
+            if (source_kind == .namespace) continue;
+        }
         if (!spec.ro) rw += 1;
     }
     return rw;
+}
+
+fn countFilesystemExportSpecs(specs: []const fs_node_ops.ExportSpec) usize {
+    var total: usize = 0;
+    for (specs) |spec| {
+        if (spec.source_kind) |source_kind| {
+            if (source_kind == .namespace) continue;
+        }
+        total += 1;
+    }
+    return total;
 }
 
 fn loadConfiguredManifestServices(
@@ -1351,6 +1610,7 @@ fn deinitNamespaceServiceExportList(
 fn rebuildEffectiveExportSpecs(
     allocator: std.mem.Allocator,
     base_exports: []const fs_node_ops.ExportSpec,
+    static_namespace_exports: []const NamespaceServiceExportSpecOwned,
     runtime_namespace_exports: []const NamespaceServiceExportSpecOwned,
     out: *std.ArrayListUnmanaged(fs_node_ops.ExportSpec),
 ) !void {
@@ -1362,6 +1622,13 @@ fn rebuildEffectiveExportSpecs(
     for (out.items) |spec| {
         if (names.contains(spec.name)) return error.InvalidArguments;
         try names.put(allocator, spec.name, {});
+    }
+
+    for (static_namespace_exports) |*owned_spec| {
+        const candidate = owned_spec.asExportSpec();
+        if (names.contains(candidate.name)) return error.InvalidArguments;
+        try names.put(allocator, candidate.name, {});
+        try out.append(allocator, candidate);
     }
 
     for (runtime_namespace_exports) |*owned_spec| {
@@ -1941,6 +2208,7 @@ fn refreshControlRuntimeForNode(
     allocator: std.mem.Allocator,
     state: *const NodePairState,
     base_exports: []const fs_node_ops.ExportSpec,
+    static_namespace_exports: []const NamespaceServiceExportSpecOwned,
     service_manifest_paths: []const []const u8,
     services_dirs: []const []const u8,
     service_registry: *node_capability_providers.Registry,
@@ -1969,10 +2237,11 @@ fn refreshControlRuntimeForNode(
     try rebuildEffectiveExportSpecs(
         allocator,
         base_exports,
+        static_namespace_exports,
         runtime_namespace_exports.items,
         effective_exports,
     );
-    service_registry.fs_export_count = effective_exports.items.len;
+    service_registry.fs_export_count = countFilesystemExportSpecs(effective_exports.items);
     service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
 
     const next_payload = try service_registry.buildServiceUpsertPayload(
@@ -2191,6 +2460,7 @@ fn runControlRoutedNodeService(
     allocator: std.mem.Allocator,
     connect: ControlConnectOptions,
     base_exports: []const fs_node_ops.ExportSpec,
+    static_namespace_exports: []const NamespaceServiceExportSpecOwned,
     service_manifest_paths: []const []const u8,
     services_dirs: []const []const u8,
     service_registry: *node_capability_providers.Registry,
@@ -2247,6 +2517,7 @@ fn runControlRoutedNodeService(
             allocator,
             &state,
             base_exports,
+            static_namespace_exports,
             service_manifest_paths,
             services_dirs,
             service_registry,
@@ -2321,6 +2592,7 @@ fn runControlRoutedNodeService(
                     allocator,
                     &state,
                     base_exports,
+                    static_namespace_exports,
                     service_manifest_paths,
                     services_dirs,
                     service_registry,
@@ -3419,6 +3691,66 @@ test "fs_node_main: runtime state path derives from node state path" {
     try std.testing.expectEqualStrings("/tmp/pair-state.json.runtime-services.json", path);
 }
 
+test "fs_node_main: terminal ids build executable namespace exports" {
+    const allocator = std.testing.allocator;
+    var terminal_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &terminal_exports);
+        terminal_exports.deinit(allocator);
+    }
+
+    try buildTerminalNamespaceExports(
+        allocator,
+        &.{ "1", "2" },
+        "/tmp/spiderweb-fs-node",
+        &terminal_exports,
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), terminal_exports.items.len);
+    const first = terminal_exports.items[0];
+    try std.testing.expectEqualStrings("terminal-1", first.name);
+    try std.testing.expectEqualStrings("/terminal/1", first.path);
+    try std.testing.expectEqualStrings("service:terminal-1", first.source_id);
+    try std.testing.expectEqualStrings("terminal-1", first.service_id);
+    try std.testing.expect(first.runtime_kind == .native_proc);
+    try std.testing.expectEqualStrings("/tmp/spiderweb-fs-node", first.executable_path.?);
+    try std.testing.expectEqual(@as(usize, 3), first.args.items.len);
+    try std.testing.expectEqualStrings("--internal-terminal-invoke", first.args.items[0]);
+    try std.testing.expectEqualStrings("--terminal-id", first.args.items[1]);
+    try std.testing.expectEqualStrings("1", first.args.items[2]);
+}
+
+test "fs_node_main: invokeTerminalRequestJson executes argv payload" {
+    const allocator = std.testing.allocator;
+    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe);
+    const escaped_self_exe = try jsonEscape(allocator, self_exe);
+    defer allocator.free(escaped_self_exe);
+
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"argv\":[\"{s}\",\"--help\"],\"max_output_bytes\":4096}}",
+        .{escaped_self_exe},
+    );
+    defer allocator.free(payload);
+
+    const result = try invokeTerminalRequestJson(allocator, "1", payload);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"service\":\"terminal\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"terminal_id\":\"1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"operation\":\"exec\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"exit_code\":0") != null);
+}
+
+test "fs_node_main: invokeTerminalRequestJson rejects invalid payload" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(
+        error.InvalidPayload,
+        invokeTerminalRequestJson(allocator, "1", "{}"),
+    );
+}
+
 test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
     const allocator = std.testing.allocator;
     var temp = std.testing.tmpDir(.{});
@@ -3476,6 +3808,7 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
         allocator,
         &state,
         &.{},
+        &.{},
         &.{manifest_path},
         &.{},
         &registry,
@@ -3495,6 +3828,7 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
     const changed_noop = try refreshControlRuntimeForNode(
         allocator,
         &state,
+        &.{},
         &.{},
         &.{manifest_path},
         &.{},
@@ -3524,6 +3858,7 @@ test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
     const changed_update = try refreshControlRuntimeForNode(
         allocator,
         &state,
+        &.{},
         &.{},
         &.{manifest_path},
         &.{},

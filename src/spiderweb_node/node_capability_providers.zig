@@ -293,7 +293,7 @@ fn appendTerminalService(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\"}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin terminal namespace driver\"}}",
+        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\",\"invoke\":true}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true,\"invoke\":\"control/invoke.json\",\"paths\":{{\"exec\":\"control/invoke.json\"}}}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"namespace-driver-v1\",\"entry\":\"internal-terminal-invoke\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-service-v1\"}},\"help_md\":\"Terminal namespace driver\"}}",
         .{ service_id, endpoint, escaped_terminal_id, service_id, endpoint },
     );
 }

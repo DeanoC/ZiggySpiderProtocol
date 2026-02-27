@@ -39,7 +39,7 @@ For `native_inproc`, when `runtime.abi` is present it must be
 
 For each executable service, the node runtime creates a namespace export with:
 
-- export name: `svc-<service_id>`
+- export name: `<service_id>`
 - source id/path seed: `service:<service_id>`
 
 Projected files:
@@ -161,6 +161,22 @@ Writes trigger FS invalidation events on updated files.
 
 Drivers should treat each invocation as stateless, idempotent where possible,
 and return structured JSON on `stdout`.
+
+## Reference Terminal Service
+
+`spiderweb-fs-node --terminal-id <id>` now provisions a concrete namespace
+service export (`terminal-<id>`) backed by the node binary's internal terminal
+invoke entrypoint.
+
+- catalog endpoint/mount path: `/nodes/<node_id>/terminal/<id>`
+- runtime type: `native_proc` (`namespace-driver-v1`)
+- invoke path: `control/invoke.json`
+- payload supports either:
+  - `{"argv":["<bin>","arg1",...],"cwd":"...","max_output_bytes":131072}`
+  - `{"command":"<shell command>","cwd":"...","max_output_bytes":131072}`
+- result JSON includes:
+  - `service`, `terminal_id`, `operation`, `ok`, `state`, `exit_code`,
+    `stdout`, `stderr`
 
 ## Native In-Process ABI
 
