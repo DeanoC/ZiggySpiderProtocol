@@ -19,6 +19,7 @@ const default_control_backoff_ms: u64 = 5_000;
 const default_control_backoff_max_ms: u64 = 60_000;
 const default_lease_ttl_ms: u64 = 15 * 60 * 1000;
 const default_lease_refresh_interval_ms: u64 = 60 * 1000;
+const default_manifest_reload_interval_ms: u64 = 2_000;
 const control_reply_timeout_ms: i32 = 45_000;
 const fsrpc_node_protocol_version = "unified-v2-fs";
 const fsrpc_node_proto_id: i64 = 2;
@@ -163,12 +164,45 @@ const ControlPairingOptions = struct {
     reconnect_backoff_max_ms: u64,
 };
 
+const SharedServiceRegistry = struct {
+    allocator: std.mem.Allocator,
+    mutex: std.Thread.Mutex = .{},
+    registry: node_capability_providers.Registry,
+
+    fn init(allocator: std.mem.Allocator, initial: *const node_capability_providers.Registry) !SharedServiceRegistry {
+        return .{
+            .allocator = allocator,
+            .registry = try initial.clone(allocator),
+        };
+    }
+
+    fn deinit(self: *SharedServiceRegistry) void {
+        self.registry.deinit();
+        self.* = undefined;
+    }
+
+    fn snapshot(self: *SharedServiceRegistry) !node_capability_providers.Registry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.registry.clone(self.allocator);
+    }
+
+    fn replaceFrom(self: *SharedServiceRegistry, incoming: *const node_capability_providers.Registry) !void {
+        const next = try incoming.clone(self.allocator);
+        self.mutex.lock();
+        var old = self.registry;
+        self.registry = next;
+        self.mutex.unlock();
+        old.deinit();
+    }
+};
+
 const LeaseRefreshContext = struct {
     allocator: std.mem.Allocator,
     connect: ControlConnectOptions,
     state_path: []u8,
     fs_url: []u8,
-    service_registry: node_capability_providers.Registry,
+    shared_service_registry: *SharedServiceRegistry,
     lease_ttl_ms: u64,
     refresh_interval_ms: u64,
     reconnect_backoff_ms: u64,
@@ -181,7 +215,7 @@ const LeaseRefreshContext = struct {
         connect: ControlConnectOptions,
         state_path: []const u8,
         fs_url: []const u8,
-        service_registry: *const node_capability_providers.Registry,
+        shared_service_registry: *SharedServiceRegistry,
         lease_ttl_ms: u64,
         refresh_interval_ms: u64,
         reconnect_backoff_ms: u64,
@@ -195,7 +229,7 @@ const LeaseRefreshContext = struct {
             },
             .state_path = try allocator.dupe(u8, state_path),
             .fs_url = try allocator.dupe(u8, fs_url),
-            .service_registry = try service_registry.clone(allocator),
+            .shared_service_registry = shared_service_registry,
             .lease_ttl_ms = lease_ttl_ms,
             .refresh_interval_ms = refresh_interval_ms,
             .reconnect_backoff_ms = reconnect_backoff_ms,
@@ -208,7 +242,6 @@ const LeaseRefreshContext = struct {
         if (self.connect.auth_token) |value| self.allocator.free(value);
         self.allocator.free(self.state_path);
         self.allocator.free(self.fs_url);
-        self.service_registry.deinit();
         self.* = undefined;
     }
 
@@ -329,6 +362,7 @@ pub fn main() !void {
     var state_path: []const u8 = default_state_path;
     var lease_ttl_ms: u64 = default_lease_ttl_ms;
     var refresh_interval_ms: u64 = default_lease_refresh_interval_ms;
+    var manifest_reload_interval_ms: u64 = default_manifest_reload_interval_ms;
     var reconnect_backoff_ms: u64 = default_control_backoff_ms;
     var reconnect_backoff_max_ms: u64 = default_control_backoff_max_ms;
     var enable_fs_service = true;
@@ -409,6 +443,10 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
             refresh_interval_ms = try std.fmt.parseInt(u64, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--manifest-reload-interval-ms")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArguments;
+            manifest_reload_interval_ms = try std.fmt.parseInt(u64, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--reconnect-backoff-ms")) {
             i += 1;
             if (i >= args.len) return error.InvalidArguments;
@@ -462,6 +500,8 @@ pub fn main() !void {
         .labels = service_labels.items,
     });
     defer service_registry.deinit();
+    var shared_service_registry = try SharedServiceRegistry.init(allocator, &service_registry);
+    defer shared_service_registry.deinit();
 
     if (control_url) |control_url_value| {
         const pairing_fs_url = if (advertised_fs_url != null) effective_fs_url else "";
@@ -550,6 +590,7 @@ pub fn main() !void {
                 );
                 service_registry.fs_export_count = effective_exports.items.len;
                 service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
+                try shared_service_registry.replaceFrom(&service_registry);
 
                 upsertNodeServiceCatalog(
                     allocator,
@@ -604,7 +645,7 @@ pub fn main() !void {
                 },
                 state_path,
                 routed_fs_url,
-                &service_registry,
+                &shared_service_registry,
                 lease_ttl_ms,
                 refresh_interval_ms,
                 reconnect_backoff_ms,
@@ -635,8 +676,13 @@ pub fn main() !void {
                     .url = control_url_value,
                     .auth_token = control_auth_token,
                 },
-                effective_exports.items,
+                exports.items,
+                service_manifest_paths.items,
+                services_dirs.items,
+                &service_registry,
+                &shared_service_registry,
                 state_path,
+                manifest_reload_interval_ms,
                 reconnect_backoff_ms,
                 reconnect_backoff_max_ms,
             ) catch |err| switch (err) {
@@ -684,6 +730,7 @@ pub fn main() !void {
     );
     service_registry.fs_export_count = effective_exports.items.len;
     service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
+    try shared_service_registry.replaceFrom(&service_registry);
 
     std.log.info("Starting spiderweb-fs-node on {s}:{d}", .{ bind_addr, port });
     if (auth_token != null) {
@@ -1420,10 +1467,16 @@ fn leaseRefreshThreadMain(ctx: *LeaseRefreshContext) void {
                 };
 
                 failures = 0;
+                var registry_snapshot = ctx.shared_service_registry.snapshot() catch |clone_err| {
+                    std.log.warn("lease refresh: snapshot service registry failed: {s}", .{@errorName(clone_err)});
+                    std.log.debug("node lease refreshed: node={s} lease_expires_at_ms={d}", .{ state.node_id.?, state.lease_expires_at_ms });
+                    continue;
+                };
+                defer registry_snapshot.deinit();
                 upsertNodeServiceCatalog(
                     ctx.allocator,
                     ctx.connect,
-                    &ctx.service_registry,
+                    &registry_snapshot,
                     &state,
                 ) catch |err| {
                     std.log.warn("lease refresh: service catalog upsert failed: {s}", .{@errorName(err)});
@@ -1536,21 +1589,140 @@ fn refreshNodeLeaseOnce(
     }
 }
 
+fn refreshControlRuntimeForNode(
+    allocator: std.mem.Allocator,
+    state: *const NodePairState,
+    base_exports: []const fs_node_ops.ExportSpec,
+    service_manifest_paths: []const []const u8,
+    services_dirs: []const []const u8,
+    service_registry: *node_capability_providers.Registry,
+    shared_service_registry: *SharedServiceRegistry,
+    runtime_manager: *service_runtime_manager.RuntimeManager,
+    runtime_namespace_exports: *std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned),
+    effective_exports: *std.ArrayListUnmanaged(fs_node_ops.ExportSpec),
+    service: *fs_node_service.NodeService,
+    runtime_state_path: []const u8,
+    last_manifest_payload: *?[]u8,
+) !bool {
+    const node_id = state.node_id orelse return error.MissingField;
+    const node_secret = state.node_secret orelse return error.MissingField;
+
+    service_registry.clearExtraServices();
+    deinitNamespaceServiceExportList(allocator, runtime_namespace_exports);
+    try loadConfiguredManifestServices(
+        allocator,
+        node_id,
+        service_manifest_paths,
+        services_dirs,
+        service_registry,
+        runtime_namespace_exports,
+    );
+    try rebuildEffectiveExportSpecs(
+        allocator,
+        base_exports,
+        runtime_namespace_exports.items,
+        effective_exports,
+    );
+    service_registry.fs_export_count = effective_exports.items.len;
+    service_registry.fs_rw_export_count = countRwExportSpecs(effective_exports.items);
+
+    const next_payload = try service_registry.buildServiceUpsertPayload(
+        allocator,
+        node_id,
+        node_secret,
+        @tagName(builtin.os.tag),
+        @tagName(builtin.cpu.arch),
+        "native",
+    );
+
+    const changed = if (last_manifest_payload.*) |previous|
+        !std.mem.eql(u8, previous, next_payload)
+    else
+        true;
+
+    if (!changed) {
+        allocator.free(next_payload);
+        return false;
+    }
+
+    const runtime_snapshot: ?[]u8 = service.exportNamespaceRuntimeStateJson(allocator) catch null;
+    defer if (runtime_snapshot) |snapshot| allocator.free(snapshot);
+
+    var next_service = try fs_node_service.NodeService.init(allocator, effective_exports.items);
+    errdefer next_service.deinit();
+    if (runtime_snapshot) |snapshot| {
+        next_service.restoreNamespaceRuntimeStateJson(snapshot) catch |restore_err| {
+            std.log.warn("manifest reload: runtime state restore failed: {s}", .{@errorName(restore_err)});
+        };
+    }
+
+    var old_service = service.*;
+    service.* = next_service;
+    old_service.deinit();
+
+    try syncServiceRuntimeManagerFromRegistry(allocator, service_registry, runtime_manager);
+    try shared_service_registry.replaceFrom(service_registry);
+
+    if (last_manifest_payload.*) |previous| allocator.free(previous);
+    last_manifest_payload.* = next_payload;
+
+    saveNamespaceRuntimeStateToFile(allocator, runtime_state_path, service) catch |save_err| {
+        std.log.warn("manifest reload: persist runtime state failed: {s}", .{@errorName(save_err)});
+    };
+    return true;
+}
+
+fn syncServiceRuntimeManagerFromRegistry(
+    allocator: std.mem.Allocator,
+    service_registry: *const node_capability_providers.Registry,
+    runtime_manager: *service_runtime_manager.RuntimeManager,
+) !void {
+    runtime_manager.stopAll();
+    runtime_manager.deinit();
+    runtime_manager.* = service_runtime_manager.RuntimeManager.init(allocator);
+    for (service_registry.extra_services.items) |service| {
+        try runtime_manager.registerFromServiceJson(service.service_json);
+    }
+    try runtime_manager.startAll();
+}
+
 fn runControlRoutedNodeService(
     allocator: std.mem.Allocator,
     connect: ControlConnectOptions,
-    export_specs: []const fs_node_ops.ExportSpec,
+    base_exports: []const fs_node_ops.ExportSpec,
+    service_manifest_paths: []const []const u8,
+    services_dirs: []const []const u8,
+    service_registry: *node_capability_providers.Registry,
+    shared_service_registry: *SharedServiceRegistry,
     state_path: []const u8,
+    manifest_reload_interval_ms: u64,
     reconnect_backoff_ms: u64,
     reconnect_backoff_max_ms: u64,
 ) !void {
-    var service = try fs_node_service.NodeService.init(allocator, export_specs);
+    var runtime_namespace_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &runtime_namespace_exports);
+        runtime_namespace_exports.deinit(allocator);
+    }
+    var effective_exports = std.ArrayListUnmanaged(fs_node_ops.ExportSpec){};
+    defer effective_exports.deinit(allocator);
+
+    var service = try fs_node_service.NodeService.init(allocator, base_exports);
     defer service.deinit();
+    var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
+    defer runtime_manager.deinit();
     const runtime_state_path = try runtimeStatePathForNodeState(allocator, state_path);
     defer allocator.free(runtime_state_path);
     loadNamespaceRuntimeStateFromFile(allocator, runtime_state_path, &service) catch |err| {
         std.log.warn("control tunnel: failed loading runtime state from {s}: {s}", .{ runtime_state_path, @errorName(err) });
     };
+    var last_manifest_payload: ?[]u8 = null;
+    defer if (last_manifest_payload) |payload| allocator.free(payload);
+    const reload_interval_ms = if (manifest_reload_interval_ms == 0)
+        default_manifest_reload_interval_ms
+    else
+        manifest_reload_interval_ms;
+    var next_manifest_reload_ms = std.time.milliTimestamp() + @as(i64, @intCast(reload_interval_ms));
 
     var attempts: u32 = 0;
     while (true) {
@@ -1565,6 +1737,28 @@ fn runControlRoutedNodeService(
         if (!state.isPaired()) return error.PairingFailed;
         const node_id = state.node_id orelse return error.MissingField;
         const node_secret = state.node_secret orelse return error.MissingField;
+
+        _ = refreshControlRuntimeForNode(
+            allocator,
+            &state,
+            base_exports,
+            service_manifest_paths,
+            services_dirs,
+            service_registry,
+            shared_service_registry,
+            &runtime_manager,
+            &runtime_namespace_exports,
+            &effective_exports,
+            &service,
+            runtime_state_path,
+            &last_manifest_payload,
+        ) catch |reload_err| {
+            const wait_ms = computeBackoff(reconnect_backoff_ms, reconnect_backoff_max_ms, attempts);
+            attempts +%= 1;
+            std.log.warn("control tunnel: manifest load failed: {s}; retrying in {d} ms", .{ @errorName(reload_err), wait_ms });
+            std.Thread.sleep(wait_ms * std.time.ns_per_ms);
+            continue;
+        };
 
         const parsed_url = parseWsUrlWithDefaultPath(connect.url, "/") catch |url_err| {
             const wait_ms = computeBackoff(reconnect_backoff_ms, reconnect_backoff_max_ms, attempts);
@@ -1611,8 +1805,50 @@ fn runControlRoutedNodeService(
 
         attempts = 0;
         std.log.info("control tunnel established for node {s}", .{node_id});
+        next_manifest_reload_ms = std.time.milliTimestamp() + @as(i64, @intCast(reload_interval_ms));
 
         while (true) {
+            const now_ms = std.time.milliTimestamp();
+            if (now_ms >= next_manifest_reload_ms) {
+                const changed = refreshControlRuntimeForNode(
+                    allocator,
+                    &state,
+                    base_exports,
+                    service_manifest_paths,
+                    services_dirs,
+                    service_registry,
+                    shared_service_registry,
+                    &runtime_manager,
+                    &runtime_namespace_exports,
+                    &effective_exports,
+                    &service,
+                    runtime_state_path,
+                    &last_manifest_payload,
+                ) catch |reload_err| {
+                    std.log.warn("control tunnel: manifest reload failed: {s}", .{@errorName(reload_err)});
+                    false;
+                };
+                if (changed) {
+                    upsertNodeServiceCatalog(
+                        allocator,
+                        connect,
+                        service_registry,
+                        &state,
+                    ) catch |upsert_err| switch (upsert_err) {
+                        error.ControlNodeIdentityRejected => return error.ControlNodeIdentityRejected,
+                        else => std.log.warn("control tunnel: service catalog upsert after reload failed: {s}", .{@errorName(upsert_err)}),
+                    };
+                    std.log.info("control tunnel: applied manifest hot-reload for node {s}", .{node_id});
+                }
+                next_manifest_reload_ms = now_ms + @as(i64, @intCast(reload_interval_ms));
+            }
+
+            const readable = waitReadable(&stream, 250) catch |wait_err| {
+                std.log.warn("control tunnel wait failed: {s}", .{@errorName(wait_err)});
+                break;
+            };
+            if (!readable) continue;
+
             var frame = readServerFrame(allocator, &stream, 4 * 1024 * 1024) catch |read_err| {
                 std.log.warn("control tunnel disconnected: {s}", .{@errorName(read_err)});
                 break;
@@ -2348,7 +2584,7 @@ fn printHelp() !void {
         \\  spiderweb-fs-node [--bind <addr>] [--port <port>] [--export <name>=<path>[:ro|:rw][:cred=<handle>]] [--auth-token <token>]
         \\                    [--control-url <ws-url> [--control-auth-token <token>] [--pair-mode <invite|request>] [--invite-token <token>]
         \\                     [--operator-token <token>] [--node-name <name>] [--fs-url <ws-url>] [--state-file <path>]
-        \\                     [--lease-ttl-ms <ms>] [--refresh-interval-ms <ms>] [--reconnect-backoff-ms <ms>] [--reconnect-backoff-max-ms <ms>]
+        \\                     [--lease-ttl-ms <ms>] [--refresh-interval-ms <ms>] [--manifest-reload-interval-ms <ms>] [--reconnect-backoff-ms <ms>] [--reconnect-backoff-max-ms <ms>]
         \\                     [--no-fs-service] [--terminal-id <id>] [--label <key=value>]
         \\                     [--service-manifest <path>] [--services-dir <path>]]
         \\
@@ -2636,4 +2872,121 @@ test "fs_node_main: runtime state path derives from node state path" {
     const path = try runtimeStatePathForNodeState(allocator, "/tmp/pair-state.json");
     defer allocator.free(path);
     try std.testing.expectEqualStrings("/tmp/pair-state.json.runtime-services.json", path);
+}
+
+test "fs_node_main: refreshControlRuntimeForNode detects manifest changes" {
+    const allocator = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const root = try temp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(root);
+
+    const manifest_path = try std.fmt.allocPrint(allocator, "{s}/hot.json", .{root});
+    defer allocator.free(manifest_path);
+    const runtime_state_path = try std.fmt.allocPrint(allocator, "{s}/runtime-state.json", .{root});
+    defer allocator.free(runtime_state_path);
+
+    try temp.dir.writeFile(.{
+        .sub_path = "hot.json",
+        .data =
+        \\{
+        \\  "service_id": "hot-a",
+        \\  "kind": "tooling",
+        \\  "runtime": { "type": "builtin" }
+        \\}
+        ,
+    });
+
+    var state = NodePairState{
+        .node_id = try allocator.dupe(u8, "node-hot"),
+        .node_secret = try allocator.dupe(u8, "secret-hot"),
+    };
+    defer state.deinit(allocator);
+
+    var registry = try node_capability_providers.Registry.init(allocator, .{
+        .enable_fs_service = false,
+        .export_specs = &.{},
+    });
+    defer registry.deinit();
+    var shared_registry = try SharedServiceRegistry.init(allocator, &registry);
+    defer shared_registry.deinit();
+
+    var runtime_manager = service_runtime_manager.RuntimeManager.init(allocator);
+    defer runtime_manager.deinit();
+    var runtime_exports = std.ArrayListUnmanaged(NamespaceServiceExportSpecOwned){};
+    defer {
+        deinitNamespaceServiceExportList(allocator, &runtime_exports);
+        runtime_exports.deinit(allocator);
+    }
+    var effective_exports = std.ArrayListUnmanaged(fs_node_ops.ExportSpec){};
+    defer effective_exports.deinit(allocator);
+    var service = try fs_node_service.NodeService.init(allocator, &.{});
+    defer service.deinit();
+    var last_payload: ?[]u8 = null;
+    defer if (last_payload) |payload| allocator.free(payload);
+
+    const changed_initial = try refreshControlRuntimeForNode(
+        allocator,
+        &state,
+        &.{},
+        &.{manifest_path},
+        &.{},
+        &registry,
+        &shared_registry,
+        &runtime_manager,
+        &runtime_exports,
+        &effective_exports,
+        &service,
+        runtime_state_path,
+        &last_payload,
+    );
+    try std.testing.expect(changed_initial);
+    try std.testing.expectEqual(@as(usize, 1), registry.extra_services.items.len);
+    try std.testing.expect(last_payload != null);
+
+    const changed_noop = try refreshControlRuntimeForNode(
+        allocator,
+        &state,
+        &.{},
+        &.{manifest_path},
+        &.{},
+        &registry,
+        &shared_registry,
+        &runtime_manager,
+        &runtime_exports,
+        &effective_exports,
+        &service,
+        runtime_state_path,
+        &last_payload,
+    );
+    try std.testing.expect(!changed_noop);
+
+    try temp.dir.writeFile(.{
+        .sub_path = "hot.json",
+        .data =
+        \\{
+        \\  "service_id": "hot-b",
+        \\  "kind": "tooling",
+        \\  "runtime": { "type": "builtin" }
+        \\}
+        ,
+    });
+
+    const changed_update = try refreshControlRuntimeForNode(
+        allocator,
+        &state,
+        &.{},
+        &.{manifest_path},
+        &.{},
+        &registry,
+        &shared_registry,
+        &runtime_manager,
+        &runtime_exports,
+        &effective_exports,
+        &service,
+        runtime_state_path,
+        &last_payload,
+    );
+    try std.testing.expect(changed_update);
+    try std.testing.expectEqualStrings("hot-b", registry.extra_services.items[0].service_id);
 }

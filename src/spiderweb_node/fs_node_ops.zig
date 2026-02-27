@@ -7,6 +7,7 @@ const fs_local_source_adapter = @import("fs_local_source_adapter.zig");
 const fs_windows_source_adapter = @import("fs_windows_source_adapter.zig");
 const fs_gdrive_backend = @import("fs_gdrive_backend.zig");
 const credential_store = @import("credential_store.zig");
+const service_runtime_host = @import("service_runtime_host.zig");
 const wasm_host_adapter = @import("wasm_host_adapter.zig");
 
 const node_id_export_shift: u6 = 48;
@@ -32,7 +33,7 @@ const namespace_chat_schema_json =
 const namespace_chat_meta_json =
     "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
 const namespace_service_schema_json =
-    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\"}";
+    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
 const namespace_service_wasm_default_runner: []const u8 = "wasmtime";
 
 const max_read_bytes: u32 = 1024 * 1024;
@@ -928,6 +929,12 @@ pub const NodeOps = struct {
                 "Namespace service driver.\nWrite JSON to control/invoke.json.\nRead result.json and status.json.\n";
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "README.md", .file, false, service_help);
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "SCHEMA.json", .file, false, namespace_service_schema_json);
+            const host_json = if (maybe_service_cfg) |service_cfg|
+                try service_runtime_host.renderMetadataJson(self.allocator, service_cfg.runtime_kind.asString())
+            else
+                try service_runtime_host.renderMetadataJson(self.allocator, "builtin");
+            defer self.allocator.free(host_json);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "HOST.json", .file, false, host_json);
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "result.json", .file, false, "{\"state\":\"idle\"}");
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "last_error.txt", .file, false, "");
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "status.json", .file, false, "{\"state\":\"idle\"}");
