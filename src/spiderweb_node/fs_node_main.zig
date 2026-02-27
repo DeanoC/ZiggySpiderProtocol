@@ -243,8 +243,14 @@ const NamespaceServiceExportSpecOwned = struct {
     source_id: []u8,
     desc: []u8,
     service_id: []u8,
-    executable_path: []u8,
+    runtime_kind: fs_node_ops.NamespaceServiceRuntimeKind = .native_proc,
+    executable_path: ?[]u8 = null,
+    library_path: ?[]u8 = null,
+    module_path: ?[]u8 = null,
+    wasm_runner_path: ?[]u8 = null,
+    wasm_entrypoint: ?[]u8 = null,
     args: std.ArrayListUnmanaged([]u8) = .{},
+    timeout_ms: u64 = 30_000,
     help_md: ?[]u8 = null,
 
     fn deinit(self: *NamespaceServiceExportSpecOwned, allocator: std.mem.Allocator) void {
@@ -253,7 +259,11 @@ const NamespaceServiceExportSpecOwned = struct {
         allocator.free(self.source_id);
         allocator.free(self.desc);
         allocator.free(self.service_id);
-        allocator.free(self.executable_path);
+        if (self.executable_path) |value| allocator.free(value);
+        if (self.library_path) |value| allocator.free(value);
+        if (self.module_path) |value| allocator.free(value);
+        if (self.wasm_runner_path) |value| allocator.free(value);
+        if (self.wasm_entrypoint) |value| allocator.free(value);
         for (self.args.items) |arg| allocator.free(arg);
         self.args.deinit(allocator);
         if (self.help_md) |value| allocator.free(value);
@@ -270,8 +280,14 @@ const NamespaceServiceExportSpecOwned = struct {
             .source_id = self.source_id,
             .namespace_service = .{
                 .service_id = self.service_id,
+                .runtime_kind = self.runtime_kind,
                 .executable_path = self.executable_path,
+                .library_path = self.library_path,
+                .module_path = self.module_path,
+                .wasm_runner_path = self.wasm_runner_path,
+                .wasm_entrypoint = self.wasm_entrypoint,
                 .args = self.args.items,
+                .timeout_ms = self.timeout_ms,
                 .help_md = self.help_md,
             },
         };
@@ -774,12 +790,63 @@ fn buildNamespaceServiceExportFromServiceJson(
         if (value == .string and value.string.len > 0) value.string else return error.InvalidArguments
     else
         "builtin";
-    if (!std.mem.eql(u8, runtime_type, "native_proc")) return null;
-
-    const executable_path = if (runtime.object.get("executable_path")) |value|
-        if (value == .string and value.string.len > 0) value.string else return error.InvalidArguments
+    const runtime_kind: fs_node_ops.NamespaceServiceRuntimeKind = if (std.mem.eql(u8, runtime_type, "native_proc"))
+        .native_proc
+    else if (std.mem.eql(u8, runtime_type, "native_inproc"))
+        .native_inproc
+    else if (std.mem.eql(u8, runtime_type, "wasm"))
+        .wasm
     else
         return null;
+
+    const executable_path: ?[]const u8 = blk: {
+        if (runtime.object.get("executable_path")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidArguments;
+            break :blk value.string;
+        }
+        break :blk null;
+    };
+    const library_path: ?[]const u8 = blk: {
+        if (runtime.object.get("library_path")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidArguments;
+            break :blk value.string;
+        }
+        break :blk null;
+    };
+    const module_path: ?[]const u8 = blk: {
+        if (runtime.object.get("module_path")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidArguments;
+            break :blk value.string;
+        }
+        break :blk null;
+    };
+    const wasm_runner_path: ?[]const u8 = blk: {
+        if (runtime.object.get("runner_path")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidArguments;
+            break :blk value.string;
+        }
+        break :blk null;
+    };
+    const wasm_entrypoint: ?[]const u8 = blk: {
+        if (runtime.object.get("entrypoint")) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidArguments;
+            break :blk value.string;
+        }
+        break :blk null;
+    };
+    const timeout_ms: u64 = blk: {
+        if (runtime.object.get("timeout_ms")) |value| {
+            if (value != .integer or value.integer < 0) return error.InvalidArguments;
+            break :blk @intCast(value.integer);
+        }
+        break :blk 30_000;
+    };
+
+    switch (runtime_kind) {
+        .native_proc => if (executable_path == null) return null,
+        .native_inproc => if (library_path == null) return null,
+        .wasm => if (module_path == null) return null,
+    }
 
     var owned = NamespaceServiceExportSpecOwned{
         .name = try std.fmt.allocPrint(allocator, "svc-{s}", .{service_id}),
@@ -787,7 +854,13 @@ fn buildNamespaceServiceExportFromServiceJson(
         .source_id = try std.fmt.allocPrint(allocator, "service:{s}", .{service_id}),
         .desc = try std.fmt.allocPrint(allocator, "namespace service {s}", .{service_id}),
         .service_id = try allocator.dupe(u8, service_id),
-        .executable_path = try allocator.dupe(u8, executable_path),
+        .runtime_kind = runtime_kind,
+        .executable_path = if (executable_path) |value| try allocator.dupe(u8, value) else null,
+        .library_path = if (library_path) |value| try allocator.dupe(u8, value) else null,
+        .module_path = if (module_path) |value| try allocator.dupe(u8, value) else null,
+        .wasm_runner_path = if (wasm_runner_path) |value| try allocator.dupe(u8, value) else null,
+        .wasm_entrypoint = if (wasm_entrypoint) |value| try allocator.dupe(u8, value) else null,
+        .timeout_ms = timeout_ms,
         .help_md = if (obj.get("help_md")) |value|
             if (value == .string and value.string.len > 0) try allocator.dupe(u8, value.string) else null
         else
@@ -927,9 +1000,27 @@ fn validateServiceRuntimeConfig(
                 }
                 break :blk "spiderweb_driver_v1";
             };
+            const runner_path = blk: {
+                if (runtime.object.get("runner_path")) |value| {
+                    if (value != .string or value.string.len == 0) return error.InvalidArguments;
+                    break :blk value.string;
+                }
+                break :blk null;
+            };
+            var args = std.ArrayListUnmanaged([]const u8){};
+            defer args.deinit(allocator);
+            if (runtime.object.get("args")) |value| {
+                if (value != .array) return error.InvalidArguments;
+                for (value.array.items) |item| {
+                    if (item != .string or item.string.len == 0) return error.InvalidArguments;
+                    try args.append(allocator, item.string);
+                }
+            }
             var handle = try plugin_loader_wasm.load(allocator, .{
                 .module_path = path,
                 .entrypoint = entrypoint,
+                .runner_path = runner_path,
+                .args = args.items,
             });
             defer handle.deinit(allocator);
         }
@@ -2256,8 +2347,32 @@ test "fs_node_main: native_proc namespace export is built only when executable p
     defer export_spec.deinit(allocator);
     try std.testing.expectEqualStrings("svc-camera-main", export_spec.name);
     try std.testing.expectEqualStrings("service:camera-main", export_spec.path);
-    try std.testing.expectEqualStrings("./camera-driver", export_spec.executable_path);
+    try std.testing.expect(export_spec.runtime_kind == .native_proc);
+    try std.testing.expectEqualStrings("./camera-driver", export_spec.executable_path.?);
     try std.testing.expectEqual(@as(usize, 2), export_spec.args.items.len);
+
+    const inproc_export = try buildNamespaceServiceExportFromServiceJson(
+        allocator,
+        "{\"service_id\":\"camera-inproc\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_inproc\",\"library_path\":\"./camera-driver-inproc.so\",\"timeout_ms\":15000}}",
+    );
+    try std.testing.expect(inproc_export != null);
+    var inproc_spec = inproc_export.?;
+    defer inproc_spec.deinit(allocator);
+    try std.testing.expect(inproc_spec.runtime_kind == .native_inproc);
+    try std.testing.expectEqualStrings("./camera-driver-inproc.so", inproc_spec.library_path.?);
+    try std.testing.expectEqual(@as(u64, 15_000), inproc_spec.timeout_ms);
+
+    const wasm_export = try buildNamespaceServiceExportFromServiceJson(
+        allocator,
+        "{\"service_id\":\"pdf-wasm\",\"kind\":\"converter\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/convert\"],\"runtime\":{\"type\":\"wasm\",\"module_path\":\"./drivers/pdf.wasm\",\"runner_path\":\"wasmtime\",\"entrypoint\":\"invoke\"}}",
+    );
+    try std.testing.expect(wasm_export != null);
+    var wasm_spec = wasm_export.?;
+    defer wasm_spec.deinit(allocator);
+    try std.testing.expect(wasm_spec.runtime_kind == .wasm);
+    try std.testing.expectEqualStrings("./drivers/pdf.wasm", wasm_spec.module_path.?);
+    try std.testing.expectEqualStrings("wasmtime", wasm_spec.wasm_runner_path.?);
+    try std.testing.expectEqualStrings("invoke", wasm_spec.wasm_entrypoint.?);
 }
 
 test "fs_node_main: runtime validator rejects unknown runtime type" {

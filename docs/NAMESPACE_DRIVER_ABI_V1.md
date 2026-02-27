@@ -7,21 +7,30 @@ namespace services.
 
 ## Scope
 
-ABI v1 currently standardizes `runtime.type = "native_proc"` drivers.
-`native_inproc` and `wasm` remain reserved for later phases.
+ABI v1 standardizes three runtime modes with the same namespace control surface:
+
+- `runtime.type = "native_proc"`
+- `runtime.type = "native_inproc"`
+- `runtime.type = "wasm"`
 
 ## Manifest Contract
 
 Service manifests that should expose a live executable namespace must include:
 
 - `service_id` (`string`)
-- `runtime.type = "native_proc"`
+- `runtime.type` (`native_proc` | `native_inproc` | `wasm`)
 - `runtime.abi = "namespace-driver-v1"` (recommended; treated as metadata)
-- `runtime.executable_path` (`string`, required for namespace execution)
+- runtime path field for selected mode:
+  - `native_proc`: `runtime.executable_path`
+  - `native_inproc`: `runtime.library_path`
+  - `wasm`: `runtime.module_path`
 - `runtime.args` (`array<string>`, optional)
+- `runtime.timeout_ms` (`u64`, optional, default `30000`)
+- `runtime.runner_path` (`string`, optional; wasm only, defaults to `wasmtime`)
+- `runtime.entrypoint` (`string`, optional; wasm only)
 
-If `runtime.executable_path` is omitted, the service can still be published in
-the catalog, but no executable namespace export is created.
+If the runtime-specific path field is omitted, the service can still be
+published in the catalog, but no executable namespace export is created.
 
 ## Namespace Projection
 
@@ -36,6 +45,7 @@ Projected files:
 - `SCHEMA.json`
 - `result.json`
 - `status.json`
+- `metrics.json`
 - `last_error.txt`
 - `control/invoke.json` (writable)
 - `control/reset` (writable)
@@ -54,6 +64,7 @@ Operational reset:
 - runtime resets:
   - `result.json` -> `{"state":"idle"}`
   - `status.json` -> `{"state":"idle"}`
+  - `metrics.json` unchanged
   - `last_error.txt` -> empty string
 
 Result mapping:
@@ -67,6 +78,17 @@ Result mapping:
   - `status.json.state` = `"error"`
   - `status.json.exit_code` populated
 
+`metrics.json` tracks invocation counters and timing:
+
+- `invokes_total`
+- `failures_total`
+- `consecutive_failures`
+- `timeouts_total`
+- `last_duration_ms`
+- `last_started_ms`
+- `last_finished_ms`
+- `last_exit_code`
+
 Writes trigger FS invalidation events on updated files.
 
 ## Process Rules
@@ -78,6 +100,40 @@ Writes trigger FS invalidation events on updated files.
 
 Drivers should treat each invocation as stateless, idempotent where possible,
 and return structured JSON on `stdout`.
+
+## Native In-Process ABI
+
+`native_inproc` libraries must export:
+
+- symbol: `spiderweb_driver_v1_invoke_json`
+- call convention: C
+- signature:
+
+```c
+int spiderweb_driver_v1_invoke_json(
+  const uint8_t* payload_ptr,
+  size_t payload_len,
+  uint8_t* stdout_ptr,
+  size_t stdout_cap,
+  size_t* stdout_len,
+  uint8_t* stderr_ptr,
+  size_t stderr_cap,
+  size_t* stderr_len
+);
+```
+
+Return `0` for success; non-zero for failure. Output bytes are written into
+host-provided buffers.
+
+## WASM Runtime Rules
+
+`wasm` mode executes through an external runner command:
+
+- default runner: `wasmtime`
+- command shape:
+  - `runner_path run [--invoke <entrypoint>] <module_path> [args...]`
+- invoke payload is written to runner stdin; stdout/stderr map to the same
+  namespace result/error files.
 
 ## Error Mapping
 

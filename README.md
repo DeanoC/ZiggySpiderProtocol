@@ -20,6 +20,10 @@ Shared Spiderweb protocol parsing/building utilities for Zig-based server and cl
     - `namespace_driver` (driver/runtime descriptor contracts)
     - `service_runtime_manager` (service lifecycle registry)
     - `plugin_loader_native`, `plugin_loader_process`, `plugin_loader_wasm` (runtime loader scaffolds)
+    - executable namespace runtime paths:
+      - `native_proc` (process stdin/stdout contract)
+      - `native_inproc` (dynamic library invoke symbol)
+      - `wasm` (runner-backed WASI execution)
   - Namespace executable ABI doc:
     - `docs/NAMESPACE_DRIVER_ABI_V1.md`
 

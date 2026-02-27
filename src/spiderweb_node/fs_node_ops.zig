@@ -31,10 +31,13 @@ const namespace_chat_schema_json =
 const namespace_chat_meta_json =
     "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
 const namespace_service_schema_json =
-    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\"}";
+    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\"}";
+const namespace_service_inproc_invoke_symbol: []const u8 = "spiderweb_driver_v1_invoke_json";
+const namespace_service_wasm_default_runner: []const u8 = "wasmtime";
 
 const max_read_bytes: u32 = 1024 * 1024;
 const max_write_bytes: usize = 1024 * 1024;
+const namespace_service_default_timeout_ms: u64 = 30_000;
 
 pub const ExportSpec = struct {
     name: []const u8,
@@ -66,20 +69,50 @@ const ExportConfig = struct {
 
 pub const NamespaceServiceSpec = struct {
     service_id: []const u8,
-    executable_path: []const u8,
+    runtime_kind: NamespaceServiceRuntimeKind = .native_proc,
+    executable_path: ?[]const u8 = null,
+    library_path: ?[]const u8 = null,
+    module_path: ?[]const u8 = null,
+    wasm_runner_path: ?[]const u8 = null,
+    wasm_entrypoint: ?[]const u8 = null,
     args: []const []const u8 = &.{},
+    timeout_ms: u64 = namespace_service_default_timeout_ms,
     help_md: ?[]const u8 = null,
+};
+
+pub const NamespaceServiceRuntimeKind = enum {
+    native_proc,
+    native_inproc,
+    wasm,
+
+    fn asString(self: NamespaceServiceRuntimeKind) []const u8 {
+        return switch (self) {
+            .native_proc => "native_proc",
+            .native_inproc => "native_inproc",
+            .wasm => "wasm",
+        };
+    }
 };
 
 const NamespaceServiceConfig = struct {
     service_id: []u8,
-    executable_path: []u8,
+    runtime_kind: NamespaceServiceRuntimeKind = .native_proc,
+    executable_path: ?[]u8 = null,
+    library_path: ?[]u8 = null,
+    module_path: ?[]u8 = null,
+    wasm_runner_path: ?[]u8 = null,
+    wasm_entrypoint: ?[]u8 = null,
     args: std.ArrayListUnmanaged([]u8) = .{},
+    timeout_ms: u64 = namespace_service_default_timeout_ms,
     help_md: ?[]u8 = null,
 
     fn deinit(self: *NamespaceServiceConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.service_id);
-        allocator.free(self.executable_path);
+        if (self.executable_path) |value| allocator.free(value);
+        if (self.library_path) |value| allocator.free(value);
+        if (self.module_path) |value| allocator.free(value);
+        if (self.wasm_runner_path) |value| allocator.free(value);
+        if (self.wasm_entrypoint) |value| allocator.free(value);
         for (self.args.items) |arg| allocator.free(arg);
         self.args.deinit(allocator);
         if (self.help_md) |value| allocator.free(value);
@@ -225,6 +258,17 @@ const NamespaceOpenHandle = struct {
     caps: HandleCaps,
 };
 
+const NamespaceServiceRuntimeStats = struct {
+    invokes_total: u64 = 0,
+    failures_total: u64 = 0,
+    consecutive_failures: u64 = 0,
+    timeouts_total: u64 = 0,
+    last_duration_ms: u64 = 0,
+    last_started_ms: i64 = 0,
+    last_finished_ms: i64 = 0,
+    last_exit_code: i32 = 0,
+};
+
 const GdriveNode = struct {
     export_index: usize,
     parent_node_id: ?u64,
@@ -311,6 +355,7 @@ pub const NodeOps = struct {
     handles: std.AutoHashMapUnmanaged(u64, OpenHandle) = .{},
     namespace_handles: std.AutoHashMapUnmanaged(u64, NamespaceOpenHandle) = .{},
     namespace_exports: std.AutoHashMapUnmanaged(usize, NamespaceExport) = .{},
+    namespace_service_stats: std.AutoHashMapUnmanaged(usize, NamespaceServiceRuntimeStats) = .{},
     gdrive_handles: std.AutoHashMapUnmanaged(u64, GdriveOpenHandle) = .{},
     gdrive_write_handles: std.AutoHashMapUnmanaged(u64, GdriveWriteHandle) = .{},
     gdrive_nodes: std.AutoHashMapUnmanaged(u64, GdriveNode) = .{},
@@ -375,6 +420,7 @@ pub const NodeOps = struct {
         var namespace_it = self.namespace_exports.valueIterator();
         while (namespace_it.next()) |ns_export| ns_export.deinit(self.allocator);
         self.namespace_exports.deinit(self.allocator);
+        self.namespace_service_stats.deinit(self.allocator);
         self.gdrive_handles.deinit(self.allocator);
         var gdrive_write_it = self.gdrive_write_handles.valueIterator();
         while (gdrive_write_it.next()) |handle| {
@@ -605,7 +651,13 @@ pub const NodeOps = struct {
             if (spec.namespace_service) |service_spec| blk: {
                 var owned = NamespaceServiceConfig{
                     .service_id = try self.allocator.dupe(u8, service_spec.service_id),
-                    .executable_path = try self.allocator.dupe(u8, service_spec.executable_path),
+                    .runtime_kind = service_spec.runtime_kind,
+                    .executable_path = if (service_spec.executable_path) |value| try self.allocator.dupe(u8, value) else null,
+                    .library_path = if (service_spec.library_path) |value| try self.allocator.dupe(u8, value) else null,
+                    .module_path = if (service_spec.module_path) |value| try self.allocator.dupe(u8, value) else null,
+                    .wasm_runner_path = if (service_spec.wasm_runner_path) |value| try self.allocator.dupe(u8, value) else null,
+                    .wasm_entrypoint = if (service_spec.wasm_entrypoint) |value| try self.allocator.dupe(u8, value) else null,
+                    .timeout_ms = if (service_spec.timeout_ms == 0) namespace_service_default_timeout_ms else service_spec.timeout_ms,
                     .help_md = if (service_spec.help_md) |value| try self.allocator.dupe(u8, value) else null,
                 };
                 errdefer owned.deinit(self.allocator);
@@ -725,6 +777,7 @@ pub const NodeOps = struct {
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "result.json", .file, false, "{\"state\":\"idle\"}");
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "last_error.txt", .file, false, "");
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "status.json", .file, false, "{\"state\":\"idle\"}");
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "metrics.json", .file, false, "{\"invokes_total\":0,\"failures_total\":0,\"consecutive_failures\":0,\"timeouts_total\":0}");
             const control_dir = try self.namespaceCreateNode(export_index, &ns, root.id, "control", .dir, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "invoke.json", .file, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "reset", .file, true, "");
@@ -1395,10 +1448,15 @@ pub const NodeOps = struct {
         const result_id = namespaceLookupChildNode(ns, ns.root_id, "result.json") orelse return error.FileNotFound;
         const error_id = namespaceLookupChildNode(ns, ns.root_id, "last_error.txt") orelse return error.FileNotFound;
         const status_id = namespaceLookupChildNode(ns, ns.root_id, "status.json") orelse return error.FileNotFound;
+        const metrics_id = namespaceLookupChildNode(ns, ns.root_id, "metrics.json") orelse return error.FileNotFound;
+        const stats = try self.namespaceServiceStatsPtr(export_index);
         if (std.mem.eql(u8, node.path, "/control/reset")) {
             try self.namespaceSetFileContent(ns, result_id, "{\"state\":\"idle\"}");
             try self.namespaceSetFileContent(ns, error_id, "");
             try self.namespaceSetFileContent(ns, status_id, "{\"state\":\"idle\"}");
+            const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
+            defer self.allocator.free(metrics_json);
+            try self.namespaceSetFileContent(ns, metrics_id, metrics_json);
             return;
         }
         if (!std.mem.eql(u8, node.path, "/control/invoke.json")) return;
@@ -1410,35 +1468,95 @@ pub const NodeOps = struct {
         defer parsed_payload.deinit();
         if (parsed_payload.value != .object) return error.InvalidPayload;
 
-        var invoke_result = try self.executeNamespaceServiceProcess(&service_cfg, payload);
-        defer invoke_result.deinit(self.allocator);
+        const started_ms: i64 = std.time.milliTimestamp();
+        stats.invokes_total +%= 1;
+        stats.last_started_ms = started_ms;
+        const running_status = try std.fmt.allocPrint(
+            self.allocator,
+            "{{\"state\":\"running\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"started_ms\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"timeout_ms\":{d}}}",
+            .{
+                service_cfg.service_id,
+                service_cfg.runtime_kind.asString(),
+                started_ms,
+                stats.invokes_total,
+                stats.failures_total,
+                stats.consecutive_failures,
+                stats.timeouts_total,
+                service_cfg.timeout_ms,
+            },
+        );
+        defer self.allocator.free(running_status);
+        try self.namespaceSetFileContent(ns, status_id, running_status);
 
-        if (invoke_result.success) {
+        var invoke_result = try self.executeNamespaceServiceInvocation(&service_cfg, payload);
+        defer invoke_result.deinit(self.allocator);
+        const finished_ms: i64 = std.time.milliTimestamp();
+        const duration_ms: u64 = @intCast(@max(@as(i64, 0), finished_ms - started_ms));
+        const timeout_hit = service_cfg.timeout_ms > 0 and duration_ms > service_cfg.timeout_ms;
+        stats.last_finished_ms = finished_ms;
+        stats.last_duration_ms = duration_ms;
+        stats.last_exit_code = invoke_result.exit_code;
+
+        if (invoke_result.success and !timeout_hit) {
+            stats.consecutive_failures = 0;
             const result_content = if (invoke_result.stdout.len > 0) invoke_result.stdout else "{}";
             try self.namespaceSetFileContent(ns, result_id, result_content);
             try self.namespaceSetFileContent(ns, error_id, "");
             const status_json = try std.fmt.allocPrint(
                 self.allocator,
-                "{{\"state\":\"ok\",\"service_id\":\"{s}\",\"updated_ms\":{d},\"bytes\":{d}}}",
-                .{ service_cfg.service_id, std.time.milliTimestamp(), result_content.len },
+                "{{\"state\":\"ok\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"updated_ms\":{d},\"duration_ms\":{d},\"bytes\":{d},\"exit_code\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d}}}",
+                .{
+                    service_cfg.service_id,
+                    service_cfg.runtime_kind.asString(),
+                    finished_ms,
+                    duration_ms,
+                    result_content.len,
+                    invoke_result.exit_code,
+                    stats.invokes_total,
+                    stats.failures_total,
+                    stats.consecutive_failures,
+                    stats.timeouts_total,
+                },
             );
             defer self.allocator.free(status_json);
             try self.namespaceSetFileContent(ns, status_id, status_json);
+            const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
+            defer self.allocator.free(metrics_json);
+            try self.namespaceSetFileContent(ns, metrics_id, metrics_json);
             return;
         }
 
+        stats.failures_total +%= 1;
+        stats.consecutive_failures +%= 1;
+        if (timeout_hit) stats.timeouts_total +%= 1;
         const stderr_content = if (invoke_result.stderr.len > 0)
             invoke_result.stderr
+        else if (timeout_hit)
+            "service invocation exceeded timeout_ms"
         else
             "service process failed";
         try self.namespaceSetFileContent(ns, error_id, stderr_content);
         const status_json = try std.fmt.allocPrint(
             self.allocator,
-            "{{\"state\":\"error\",\"service_id\":\"{s}\",\"updated_ms\":{d},\"exit_code\":{d}}}",
-            .{ service_cfg.service_id, std.time.milliTimestamp(), invoke_result.exit_code },
+            "{{\"state\":\"{s}\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"updated_ms\":{d},\"duration_ms\":{d},\"exit_code\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d}}}",
+            .{
+                if (timeout_hit) "timeout" else "error",
+                service_cfg.service_id,
+                service_cfg.runtime_kind.asString(),
+                finished_ms,
+                duration_ms,
+                invoke_result.exit_code,
+                stats.invokes_total,
+                stats.failures_total,
+                stats.consecutive_failures,
+                stats.timeouts_total,
+            },
         );
         defer self.allocator.free(status_json);
         try self.namespaceSetFileContent(ns, status_id, status_json);
+        const metrics_json = try self.renderNamespaceServiceMetricsJson(stats);
+        defer self.allocator.free(metrics_json);
+        try self.namespaceSetFileContent(ns, metrics_id, metrics_json);
     }
 
     const ServiceProcessResult = struct {
@@ -1454,17 +1572,36 @@ pub const NodeOps = struct {
         }
     };
 
-    fn executeNamespaceServiceProcess(
+    fn executeNamespaceServiceInvocation(
         self: *NodeOps,
         service_cfg: *const NamespaceServiceConfig,
         payload: []const u8,
     ) !ServiceProcessResult {
-        var argv = std.ArrayListUnmanaged([]const u8){};
-        defer argv.deinit(self.allocator);
-        try argv.append(self.allocator, service_cfg.executable_path);
-        for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
+        return switch (service_cfg.runtime_kind) {
+            .native_proc => {
+                const executable_path = service_cfg.executable_path orelse return error.InvalidArguments;
+                var argv = std.ArrayListUnmanaged([]const u8){};
+                defer argv.deinit(self.allocator);
+                try argv.append(self.allocator, executable_path);
+                for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
+                return self.executeNamespaceServiceCommandArgv(argv.items, payload);
+            },
+            .native_inproc => self.executeNamespaceServiceInproc(service_cfg, payload),
+            .wasm => self.executeNamespaceServiceWasm(service_cfg, payload),
+        };
+    }
 
-        var child = std.process.Child.init(argv.items, self.allocator);
+    fn executeNamespaceServiceCommandArgv(
+        self: *NodeOps,
+        command_argv: []const []const u8,
+        payload: []const u8,
+    ) !ServiceProcessResult {
+        if (command_argv.len == 0) return error.InvalidArguments;
+        var argv_list = std.ArrayListUnmanaged([]const u8){};
+        defer argv_list.deinit(self.allocator);
+        try argv_list.appendSlice(self.allocator, command_argv);
+
+        var child = std.process.Child.init(argv_list.items, self.allocator);
         child.stdin_behavior = .Pipe;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
@@ -1499,6 +1636,102 @@ pub const NodeOps = struct {
                 .success = false,
             },
         };
+    }
+
+    fn executeNamespaceServiceInproc(
+        self: *NodeOps,
+        service_cfg: *const NamespaceServiceConfig,
+        payload: []const u8,
+    ) !ServiceProcessResult {
+        const library_path = service_cfg.library_path orelse return error.InvalidArguments;
+        var lib = try std.DynLib.open(library_path);
+        defer lib.close();
+
+        const InprocInvokeFn = *const fn (
+            payload_ptr: [*]const u8,
+            payload_len: usize,
+            stdout_ptr: [*]u8,
+            stdout_cap: usize,
+            stdout_len: *usize,
+            stderr_ptr: [*]u8,
+            stderr_cap: usize,
+            stderr_len: *usize,
+        ) callconv(.C) i32;
+
+        const invoke_fn = lib.lookup(InprocInvokeFn, namespace_service_inproc_invoke_symbol) orelse return error.MissingSymbol;
+
+        const stdout_buffer = try self.allocator.alloc(u8, max_write_bytes);
+        defer self.allocator.free(stdout_buffer);
+        const stderr_buffer = try self.allocator.alloc(u8, max_write_bytes);
+        defer self.allocator.free(stderr_buffer);
+        var stdout_len: usize = 0;
+        var stderr_len: usize = 0;
+
+        const exit_code = invoke_fn(
+            payload.ptr,
+            payload.len,
+            stdout_buffer.ptr,
+            stdout_buffer.len,
+            &stdout_len,
+            stderr_buffer.ptr,
+            stderr_buffer.len,
+            &stderr_len,
+        );
+        if (stdout_len > stdout_buffer.len or stderr_len > stderr_buffer.len) return error.InvalidPayload;
+
+        return .{
+            .stdout = try self.allocator.dupe(u8, stdout_buffer[0..stdout_len]),
+            .stderr = try self.allocator.dupe(u8, stderr_buffer[0..stderr_len]),
+            .exit_code = exit_code,
+            .success = exit_code == 0,
+        };
+    }
+
+    fn executeNamespaceServiceWasm(
+        self: *NodeOps,
+        service_cfg: *const NamespaceServiceConfig,
+        payload: []const u8,
+    ) !ServiceProcessResult {
+        const module_path = service_cfg.module_path orelse return error.InvalidArguments;
+        const runner = service_cfg.wasm_runner_path orelse namespace_service_wasm_default_runner;
+
+        var argv = std.ArrayListUnmanaged([]const u8){};
+        defer argv.deinit(self.allocator);
+        try argv.append(self.allocator, runner);
+        try argv.append(self.allocator, "run");
+        if (service_cfg.wasm_entrypoint) |entrypoint| {
+            try argv.append(self.allocator, "--invoke");
+            try argv.append(self.allocator, entrypoint);
+        }
+        try argv.append(self.allocator, module_path);
+        for (service_cfg.args.items) |arg| try argv.append(self.allocator, arg);
+        return self.executeNamespaceServiceCommandArgv(argv.items, payload);
+    }
+
+    fn namespaceServiceStatsPtr(self: *NodeOps, export_index: usize) !*NamespaceServiceRuntimeStats {
+        if (self.namespace_service_stats.getPtr(export_index)) |stats| return stats;
+        try self.namespace_service_stats.put(self.allocator, export_index, .{});
+        return self.namespace_service_stats.getPtr(export_index).?;
+    }
+
+    fn renderNamespaceServiceMetricsJson(
+        self: *NodeOps,
+        stats: *const NamespaceServiceRuntimeStats,
+    ) ![]u8 {
+        return std.fmt.allocPrint(
+            self.allocator,
+            "{{\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}}",
+            .{
+                stats.invokes_total,
+                stats.failures_total,
+                stats.consecutive_failures,
+                stats.timeouts_total,
+                stats.last_duration_ms,
+                stats.last_started_ms,
+                stats.last_finished_ms,
+                stats.last_exit_code,
+            },
+        );
     }
 
     fn namespaceLookupChildNode(ns: *const NamespaceExport, parent_id: u64, name: []const u8) ?u64 {
