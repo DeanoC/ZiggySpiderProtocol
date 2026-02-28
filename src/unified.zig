@@ -7,12 +7,15 @@ pub const ParseError = types.ParseError;
 pub const Channel = types.Channel;
 pub const ControlType = types.ControlType;
 pub const FsrpcType = types.FsrpcType;
+pub const AcheronType = types.AcheronType;
 pub const ParsedMessage = types.ParsedMessage;
 
 pub const controlTypeFromString = types.controlTypeFromString;
 pub const fsrpcTypeFromString = types.fsrpcTypeFromString;
+pub const acheronTypeFromString = types.acheronTypeFromString;
 pub const controlTypeName = types.controlTypeName;
 pub const fsrpcTypeName = types.fsrpcTypeName;
+pub const acheronTypeName = types.acheronTypeName;
 
 pub const parseMessage = parse.parseMessage;
 

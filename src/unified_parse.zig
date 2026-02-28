@@ -16,8 +16,8 @@ pub fn parseMessage(allocator: std.mem.Allocator, raw_json: []const u8) !types.P
     if (channel_raw != .string) return types.ParseError.InvalidType;
     const channel = if (std.mem.eql(u8, channel_raw.string, "control"))
         types.Channel.control
-    else if (std.mem.eql(u8, channel_raw.string, "fsrpc"))
-        types.Channel.fsrpc
+    else if (std.mem.eql(u8, channel_raw.string, "acheron"))
+        types.Channel.acheron
     else
         return types.ParseError.InvalidType;
 
@@ -46,10 +46,10 @@ pub fn parseMessage(allocator: std.mem.Allocator, raw_json: []const u8) !types.P
             out.control_type = types.controlTypeFromString(type_name);
             if (out.control_type.? == .unknown) return types.ParseError.UnsupportedType;
         },
-        .fsrpc => {
-            if (!std.mem.startsWith(u8, type_name, "fsrpc.")) return types.ParseError.UnsupportedType;
-            out.fsrpc_type = types.fsrpcTypeFromString(type_name);
-            if (out.fsrpc_type.? == .unknown) return types.ParseError.UnsupportedType;
+        .acheron => {
+            if (!std.mem.startsWith(u8, type_name, "acheron.")) return types.ParseError.UnsupportedType;
+            out.acheron_type = types.acheronTypeFromString(type_name);
+            if (out.acheron_type.? == .unknown) return types.ParseError.UnsupportedType;
 
             out.tag = try parseOptionalU32(obj, "tag");
             out.node = try parseOptionalU64(obj, "node");
@@ -144,12 +144,12 @@ test "unified_parse: parses control project op envelope" {
 test "unified_parse: parses fsrpc walk envelope" {
     const allocator = std.testing.allocator;
     const raw =
-        "{\"channel\":\"fsrpc\",\"type\":\"fsrpc.t_walk\",\"tag\":3,\"fid\":1,\"newfid\":2,\"path\":[\"capabilities\",\"chat\"]}";
+        "{\"channel\":\"acheron\",\"type\":\"acheron.t_walk\",\"tag\":3,\"fid\":1,\"newfid\":2,\"path\":[\"capabilities\",\"chat\"]}";
     var parsed = try parseMessage(allocator, raw);
     defer parsed.deinit(allocator);
 
-    try std.testing.expectEqual(types.Channel.fsrpc, parsed.channel);
-    try std.testing.expectEqual(types.FsrpcType.t_walk, parsed.fsrpc_type.?);
+    try std.testing.expectEqual(types.Channel.acheron, parsed.channel);
+    try std.testing.expectEqual(types.FsrpcType.t_walk, parsed.acheron_type.?);
     try std.testing.expectEqual(@as(u32, 3), parsed.tag.?);
     try std.testing.expectEqual(@as(u32, 1), parsed.fid.?);
     try std.testing.expectEqual(@as(u32, 2), parsed.newfid.?);
@@ -160,7 +160,7 @@ test "unified_parse: parses fsrpc walk envelope" {
 test "unified_parse: parses optional correlation_id" {
     const allocator = std.testing.allocator;
     const raw =
-        "{\"channel\":\"fsrpc\",\"type\":\"fsrpc.t_write\",\"tag\":7,\"fid\":2,\"correlation_id\":\"corr-77\",\"data\":\"hi\"}";
+        "{\"channel\":\"acheron\",\"type\":\"acheron.t_write\",\"tag\":7,\"fid\":2,\"correlation_id\":\"corr-77\",\"data\":\"hi\"}";
     var parsed = try parseMessage(allocator, raw);
     defer parsed.deinit(allocator);
 
@@ -171,12 +171,12 @@ test "unified_parse: parses optional correlation_id" {
 test "unified_parse: parses fsrpc distributed-fs envelope" {
     const allocator = std.testing.allocator;
     const raw =
-        "{\"channel\":\"fsrpc\",\"type\":\"fsrpc.t_fs_lookup\",\"tag\":7,\"node\":42,\"payload\":{\"name\":\"README.md\"}}";
+        "{\"channel\":\"acheron\",\"type\":\"acheron.t_fs_lookup\",\"tag\":7,\"node\":42,\"payload\":{\"name\":\"README.md\"}}";
     var parsed = try parseMessage(allocator, raw);
     defer parsed.deinit(allocator);
 
-    try std.testing.expectEqual(types.Channel.fsrpc, parsed.channel);
-    try std.testing.expectEqual(types.FsrpcType.fs_t_lookup, parsed.fsrpc_type.?);
+    try std.testing.expectEqual(types.Channel.acheron, parsed.channel);
+    try std.testing.expectEqual(types.FsrpcType.fs_t_lookup, parsed.acheron_type.?);
     try std.testing.expectEqual(@as(u32, 7), parsed.tag.?);
     try std.testing.expectEqual(@as(u64, 42), parsed.node.?);
     try std.testing.expect(parsed.payload_json != null);
@@ -195,11 +195,11 @@ test "unified_parse: rejects channel and type namespace mismatch" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
         types.ParseError.UnsupportedType,
-        parseMessage(allocator, "{\"channel\":\"control\",\"type\":\"fsrpc.t_walk\",\"tag\":1}"),
+        parseMessage(allocator, "{\"channel\":\"control\",\"type\":\"acheron.t_walk\",\"tag\":1}"),
     );
     try std.testing.expectError(
         types.ParseError.UnsupportedType,
-        parseMessage(allocator, "{\"channel\":\"fsrpc\",\"type\":\"control.connect\",\"id\":\"c1\"}"),
+        parseMessage(allocator, "{\"channel\":\"acheron\",\"type\":\"control.connect\",\"id\":\"c1\"}"),
     );
 }
 
