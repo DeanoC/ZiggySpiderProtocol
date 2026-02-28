@@ -28,6 +28,9 @@ const fsrpc_node_proto_id: i64 = 2;
 const control_node_not_found_code = "node_not_found";
 const control_node_auth_failed_code = "node_auth_failed";
 const inproc_helper_max_io_bytes: usize = 1024 * 1024;
+const namespace_service_schema_default_json =
+    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
+const namespace_service_invoke_template_default_json = "{}";
 
 const PairMode = enum {
     invite,
@@ -289,6 +292,8 @@ const NamespaceServiceExportSpecOwned = struct {
     args: std.ArrayListUnmanaged([]u8) = .{},
     timeout_ms: u64 = 30_000,
     help_md: ?[]u8 = null,
+    schema_json: ?[]u8 = null,
+    invoke_template_json: ?[]u8 = null,
 
     fn deinit(self: *NamespaceServiceExportSpecOwned, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -304,6 +309,8 @@ const NamespaceServiceExportSpecOwned = struct {
         for (self.args.items) |arg| allocator.free(arg);
         self.args.deinit(allocator);
         if (self.help_md) |value| allocator.free(value);
+        if (self.schema_json) |value| allocator.free(value);
+        if (self.invoke_template_json) |value| allocator.free(value);
         self.* = undefined;
     }
 
@@ -326,6 +333,8 @@ const NamespaceServiceExportSpecOwned = struct {
                 .args = self.args.items,
                 .timeout_ms = self.timeout_ms,
                 .help_md = self.help_md,
+                .schema_json = self.schema_json,
+                .invoke_template_json = self.invoke_template_json,
             },
         };
     }
@@ -1373,6 +1382,14 @@ fn buildTerminalNamespaceExports(
                 u8,
                 "Terminal namespace driver.\nWrite JSON payloads to control/invoke.json with command or argv.",
             ),
+            .schema_json = try allocator.dupe(
+                u8,
+                "{\"model\":\"terminal-driver-v1\",\"arguments\":{\"command\":\"string (optional)\",\"argv\":\"string[] (optional)\",\"cwd\":\"string (optional)\",\"max_output_bytes\":\"number (optional)\"}}",
+            ),
+            .invoke_template_json = try allocator.dupe(
+                u8,
+                "{\"tool_name\":\"terminal_exec\",\"arguments\":{\"command\":\"echo hello\"}}",
+            ),
         };
         errdefer spec.deinit(allocator);
         try spec.args.append(allocator, try allocator.dupe(u8, "--internal-terminal-invoke"));
@@ -1394,6 +1411,19 @@ fn jsonObjectOptionalU64(obj: std.json.ObjectMap, key: []const u8) ?u64 {
         .integer => if (value.integer >= 0) @intCast(value.integer) else null,
         else => null,
     };
+}
+
+fn dupOptionalObjectJson(
+    allocator: std.mem.Allocator,
+    obj: std.json.ObjectMap,
+    key: []const u8,
+    default_json: []const u8,
+) ![]u8 {
+    if (obj.get(key)) |value| {
+        if (value != .object) return error.InvalidArguments;
+        return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(value, .{})});
+    }
+    return allocator.dupe(u8, default_json);
 }
 
 fn parsePairMode(raw: []const u8) ?PairMode {
@@ -1561,6 +1591,20 @@ fn buildNamespaceServiceExportFromServiceJson(
         }
         break :blk 30_000;
     };
+    const schema_json = try dupOptionalObjectJson(
+        allocator,
+        obj,
+        "schema",
+        namespace_service_schema_default_json,
+    );
+    errdefer allocator.free(schema_json);
+    const invoke_template_json = try dupOptionalObjectJson(
+        allocator,
+        obj,
+        "invoke_template",
+        namespace_service_invoke_template_default_json,
+    );
+    errdefer allocator.free(invoke_template_json);
 
     switch (runtime_kind) {
         .native_proc => if (executable_path == null) return null,
@@ -1585,6 +1629,8 @@ fn buildNamespaceServiceExportFromServiceJson(
             if (value == .string and value.string.len > 0) try allocator.dupe(u8, value.string) else null
         else
             null,
+        .schema_json = schema_json,
+        .invoke_template_json = invoke_template_json,
     };
     errdefer owned.deinit(allocator);
 
@@ -3584,7 +3630,7 @@ test "fs_node_main: native_proc namespace export is built only when executable p
 
     const with_path = try buildNamespaceServiceExportFromServiceJson(
         allocator,
-        "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_proc\",\"executable_path\":\"./camera-driver\",\"args\":[\"--mode\",\"still\"]}}",
+        "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"runtime\":{\"type\":\"native_proc\",\"executable_path\":\"./camera-driver\",\"args\":[\"--mode\",\"still\"]},\"schema\":{\"model\":\"camera-v1\",\"input\":\"control/invoke.json\"},\"invoke_template\":{\"op\":\"capture\",\"arguments\":{\"mode\":\"still\"}}}",
     );
     try std.testing.expect(with_path != null);
     var export_spec = with_path.?;
@@ -3594,6 +3640,8 @@ test "fs_node_main: native_proc namespace export is built only when executable p
     try std.testing.expect(export_spec.runtime_kind == .native_proc);
     try std.testing.expectEqualStrings("./camera-driver", export_spec.executable_path.?);
     try std.testing.expectEqual(@as(usize, 2), export_spec.args.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, export_spec.schema_json.?, "\"camera-v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, export_spec.invoke_template_json.?, "\"capture\"") != null);
 
     const inproc_export = try buildNamespaceServiceExportFromServiceJson(
         allocator,
@@ -3723,6 +3771,8 @@ test "fs_node_main: terminal ids build executable namespace exports" {
     try std.testing.expectEqualStrings("--internal-terminal-invoke", first.args.items[0]);
     try std.testing.expectEqualStrings("--terminal-id", first.args.items[1]);
     try std.testing.expectEqualStrings("1", first.args.items[2]);
+    try std.testing.expect(std.mem.indexOf(u8, first.schema_json.?, "\"terminal-driver-v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first.invoke_template_json.?, "\"terminal_exec\"") != null);
 }
 
 test "fs_node_main: invokeTerminalRequestJson executes argv payload" {

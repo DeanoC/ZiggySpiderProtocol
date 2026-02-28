@@ -73,6 +73,13 @@ pub fn loadServiceManifestFile(
         "{\"model\":\"namespace-mount\"}",
     );
     defer allocator.free(schema_json);
+    const invoke_template_json = try parseOptionalObjectJsonOrDefault(
+        allocator,
+        parsed.value.object,
+        "invoke_template",
+        "{}",
+    );
+    defer allocator.free(invoke_template_json);
 
     const help_md = try dupOptionalString(allocator, parsed.value.object, "help_md", 64 * 1024);
     defer if (help_md) |value| allocator.free(value);
@@ -94,13 +101,13 @@ pub fn loadServiceManifestFile(
         defer allocator.free(escaped_help);
         break :blk try std.fmt.allocPrint(
             allocator,
-            "{{\"service_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"help_md\":\"{s}\"}}",
-            .{ escaped_service_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, escaped_help },
+            "{{\"service_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"invoke_template\":{s},\"help_md\":\"{s}\"}}",
+            .{ escaped_service_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, invoke_template_json, escaped_help },
         );
     } else try std.fmt.allocPrint(
         allocator,
-        "{{\"service_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s}}}",
-        .{ escaped_service_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json },
+        "{{\"service_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"invoke_template\":{s}}}",
+        .{ escaped_service_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, invoke_template_json },
     );
 
     return .{
@@ -366,7 +373,8 @@ test "service_manifest: loads enabled manifest with node_id template" {
         \\  "kind": "camera",
         \\  "endpoints": ["/nodes/{node_id}/camera"],
         \\  "mounts": [{"mount_id": "camera-main", "mount_path": "/nodes/{node_id}/camera", "state": "online"}],
-        \\  "runtime": {"type": "native_proc", "abi": "namespace-driver-v1"}
+        \\  "runtime": {"type": "native_proc", "abi": "namespace-driver-v1"},
+        \\  "invoke_template": {"op": "capture", "arguments": {"mode": "still"}}
         \\}
         ,
     });
@@ -382,6 +390,8 @@ test "service_manifest: loads enabled manifest with node_id template" {
     try std.testing.expect(std.mem.eql(u8, service.service_id, "camera-main"));
     try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"/nodes/node-77/camera\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"runtime\":{\"type\":\"native_proc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"invoke_template\":") != null);
+    try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"capture\"") != null);
 }
 
 test "service_manifest: disabled manifest is ignored" {

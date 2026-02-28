@@ -46,6 +46,9 @@ Projected files:
 
 - `README.md`
 - `SCHEMA.json`
+- `schema.json` (lowercase alias)
+- `TEMPLATE.json`
+- `template.json` (lowercase alias)
 - `result.json`
 - `status.json`
 - `metrics.json`
@@ -62,6 +65,7 @@ Projected files:
 
 Invocation is file-driven:
 
+- optionally read `TEMPLATE.json` (or `template.json`) to seed payload
 - write a JSON object payload to `control/invoke.json`
 - runtime executes the configured driver runtime
 - payload bytes are sent to runtime `stdin` for `native_proc`/`wasm`

@@ -34,6 +34,7 @@ const namespace_chat_meta_json =
     "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
 const namespace_service_schema_json =
     "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
+const namespace_service_invoke_template_json = "{}";
 const namespace_service_wasm_default_runner: []const u8 = "wasmtime";
 
 const max_read_bytes: u32 = 1024 * 1024;
@@ -79,6 +80,8 @@ pub const NamespaceServiceSpec = struct {
     args: []const []const u8 = &.{},
     timeout_ms: u64 = namespace_service_default_timeout_ms,
     help_md: ?[]const u8 = null,
+    schema_json: ?[]const u8 = null,
+    invoke_template_json: ?[]const u8 = null,
 };
 
 pub const NamespaceServiceRuntimeKind = enum {
@@ -106,6 +109,8 @@ const NamespaceServiceConfig = struct {
     args: std.ArrayListUnmanaged([]u8) = .{},
     timeout_ms: u64 = namespace_service_default_timeout_ms,
     help_md: ?[]u8 = null,
+    schema_json: ?[]u8 = null,
+    invoke_template_json: ?[]u8 = null,
 
     fn deinit(self: *NamespaceServiceConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.service_id);
@@ -117,6 +122,8 @@ const NamespaceServiceConfig = struct {
         for (self.args.items) |arg| allocator.free(arg);
         self.args.deinit(allocator);
         if (self.help_md) |value| allocator.free(value);
+        if (self.schema_json) |value| allocator.free(value);
+        if (self.invoke_template_json) |value| allocator.free(value);
         self.* = undefined;
     }
 };
@@ -813,6 +820,8 @@ pub const NodeOps = struct {
                     .wasm_entrypoint = if (service_spec.wasm_entrypoint) |value| try self.allocator.dupe(u8, value) else null,
                     .timeout_ms = if (service_spec.timeout_ms == 0) namespace_service_default_timeout_ms else service_spec.timeout_ms,
                     .help_md = if (service_spec.help_md) |value| try self.allocator.dupe(u8, value) else null,
+                    .schema_json = if (service_spec.schema_json) |value| try self.allocator.dupe(u8, value) else null,
+                    .invoke_template_json = if (service_spec.invoke_template_json) |value| try self.allocator.dupe(u8, value) else null,
                 };
                 errdefer owned.deinit(self.allocator);
                 for (service_spec.args) |arg| {
@@ -927,8 +936,25 @@ pub const NodeOps = struct {
                     "Namespace service driver.\nWrite JSON to control/invoke.json.\nRead result.json and status.json.\n"
             else
                 "Namespace service driver.\nWrite JSON to control/invoke.json.\nRead result.json and status.json.\n";
+            const service_schema = if (maybe_service_cfg) |service_cfg|
+                if (service_cfg.schema_json) |value|
+                    value
+                else
+                    namespace_service_schema_json
+            else
+                namespace_service_schema_json;
+            const invoke_template = if (maybe_service_cfg) |service_cfg|
+                if (service_cfg.invoke_template_json) |value|
+                    value
+                else
+                    namespace_service_invoke_template_json
+            else
+                namespace_service_invoke_template_json;
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "README.md", .file, false, service_help);
-            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "SCHEMA.json", .file, false, namespace_service_schema_json);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "SCHEMA.json", .file, false, service_schema);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "schema.json", .file, false, service_schema);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "TEMPLATE.json", .file, false, invoke_template);
+            _ = try self.namespaceCreateNode(export_index, &ns, root.id, "template.json", .file, false, invoke_template);
             const host_json = if (maybe_service_cfg) |service_cfg|
                 try service_runtime_host.renderMetadataJson(self.allocator, service_cfg.runtime_kind.asString())
             else
