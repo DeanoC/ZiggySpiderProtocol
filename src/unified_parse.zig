@@ -209,4 +209,12 @@ test "unified_parse: rejects legacy control message names" {
         types.ParseError.UnsupportedType,
         parseMessage(allocator, "{\"channel\":\"control\",\"type\":\"session.send\",\"id\":\"legacy\"}"),
     );
+    try std.testing.expectError(
+        types.ParseError.UnsupportedType,
+        parseMessage(allocator, "{\"channel\":\"control\",\"type\":\"control.debug_subscribe\",\"id\":\"legacy-debug-sub\"}"),
+    );
+    try std.testing.expectError(
+        types.ParseError.UnsupportedType,
+        parseMessage(allocator, "{\"channel\":\"control\",\"type\":\"control.node_service_watch\",\"id\":\"legacy-watch\"}"),
+    );
 }

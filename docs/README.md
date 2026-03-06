@@ -1,4 +1,4 @@
-# ZiggySpiderProtocol Documentation
+# SpiderProtocol Documentation
 
 This folder contains the maintained docs for Spiderweb protocol and node runtime modules.
 

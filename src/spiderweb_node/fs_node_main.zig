@@ -12,7 +12,7 @@ const wasm_host_adapter = @import("wasm_host_adapter.zig");
 const service_manifest = @import("service_manifest.zig");
 const service_runtime_manager = @import("service_runtime_manager.zig");
 const namespace_driver = @import("namespace_driver.zig");
-const unified = @import("ziggy-spider-protocol").unified;
+const unified = @import("spider-protocol").unified;
 
 const default_state_path = ".spiderweb-fs-node-state.json";
 const default_node_name = "spiderweb-fs-node";

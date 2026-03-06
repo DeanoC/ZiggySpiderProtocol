@@ -25,8 +25,6 @@ pub const ControlType = enum {
     session_close,
     session_restore,
     session_history,
-    debug_subscribe,
-    debug_unsubscribe,
     ping,
     pong,
     metrics,
@@ -41,9 +39,6 @@ pub const ControlType = enum {
     node_lease_refresh,
     node_service_upsert,
     node_service_get,
-    node_service_watch,
-    node_service_unwatch,
-    node_service_event,
     agent_list,
     agent_get,
     node_list,
@@ -190,8 +185,6 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.session_close")) return .session_close;
     if (std.mem.eql(u8, value, "control.session_restore")) return .session_restore;
     if (std.mem.eql(u8, value, "control.session_history")) return .session_history;
-    if (std.mem.eql(u8, value, "control.debug_subscribe")) return .debug_subscribe;
-    if (std.mem.eql(u8, value, "control.debug_unsubscribe")) return .debug_unsubscribe;
     if (std.mem.eql(u8, value, "control.ping")) return .ping;
     if (std.mem.eql(u8, value, "control.pong")) return .pong;
     if (std.mem.eql(u8, value, "control.metrics")) return .metrics;
@@ -206,9 +199,6 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.node_lease_refresh")) return .node_lease_refresh;
     if (std.mem.eql(u8, value, "control.node_service_upsert")) return .node_service_upsert;
     if (std.mem.eql(u8, value, "control.node_service_get")) return .node_service_get;
-    if (std.mem.eql(u8, value, "control.node_service_watch")) return .node_service_watch;
-    if (std.mem.eql(u8, value, "control.node_service_unwatch")) return .node_service_unwatch;
-    if (std.mem.eql(u8, value, "control.node_service_event")) return .node_service_event;
     if (std.mem.eql(u8, value, "control.agent_list")) return .agent_list;
     if (std.mem.eql(u8, value, "control.agent_get")) return .agent_get;
     if (std.mem.eql(u8, value, "control.node_list")) return .node_list;
@@ -322,8 +312,6 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .session_close => "control.session_close",
         .session_restore => "control.session_restore",
         .session_history => "control.session_history",
-        .debug_subscribe => "control.debug_subscribe",
-        .debug_unsubscribe => "control.debug_unsubscribe",
         .ping => "control.ping",
         .pong => "control.pong",
         .metrics => "control.metrics",
@@ -338,9 +326,6 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .node_lease_refresh => "control.node_lease_refresh",
         .node_service_upsert => "control.node_service_upsert",
         .node_service_get => "control.node_service_get",
-        .node_service_watch => "control.node_service_watch",
-        .node_service_unwatch => "control.node_service_unwatch",
-        .node_service_event => "control.node_service_event",
         .agent_list => "control.agent_list",
         .agent_get => "control.agent_get",
         .node_list => "control.node_list",
@@ -452,9 +437,6 @@ test "unified_types: v2 control names round-trip as canonical strings" {
     try std.testing.expectEqual(ControlType.node_join_request, controlTypeFromString(controlTypeName(.node_join_request)));
     try std.testing.expectEqual(ControlType.node_join_approve, controlTypeFromString(controlTypeName(.node_join_approve)));
     try std.testing.expectEqual(ControlType.node_service_upsert, controlTypeFromString(controlTypeName(.node_service_upsert)));
-    try std.testing.expectEqual(ControlType.node_service_watch, controlTypeFromString(controlTypeName(.node_service_watch)));
-    try std.testing.expectEqual(ControlType.node_service_unwatch, controlTypeFromString(controlTypeName(.node_service_unwatch)));
-    try std.testing.expectEqual(ControlType.node_service_event, controlTypeFromString(controlTypeName(.node_service_event)));
     try std.testing.expectEqual(ControlType.agent_list, controlTypeFromString(controlTypeName(.agent_list)));
     try std.testing.expectEqual(ControlType.agent_get, controlTypeFromString(controlTypeName(.agent_get)));
     try std.testing.expectEqual(ControlType.project_mount_set, controlTypeFromString(controlTypeName(.project_mount_set)));
@@ -475,5 +457,10 @@ test "unified_types: v2 fsrpc names round-trip as canonical strings" {
 
 test "unified_types: legacy message names are not recognized" {
     try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("session.send"));
+    try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("control.debug_subscribe"));
+    try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("control.debug_unsubscribe"));
+    try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("control.node_service_watch"));
+    try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("control.node_service_unwatch"));
+    try std.testing.expectEqual(ControlType.unknown, controlTypeFromString("control.node_service_event"));
     try std.testing.expectEqual(FsrpcType.unknown, fsrpcTypeFromString("acheron.t_hello"));
 }

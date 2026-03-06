@@ -4,7 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addModule("ziggy-spider-protocol", .{
+    const lib = b.addModule("spider-protocol", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    _ = b.addModule("ziggy-spider-protocol", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
@@ -15,14 +20,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    spiderweb_fs.addImport("ziggy-spider-protocol", lib);
+    spiderweb_fs.addImport("spider-protocol", lib);
 
     const spiderweb_node = b.addModule("spiderweb_node", .{
         .root_source_file = b.path("src/spiderweb_node/lib.zig"),
         .target = target,
         .optimize = optimize,
     });
-    spiderweb_node.addImport("ziggy-spider-protocol", lib);
+    spiderweb_node.addImport("spider-protocol", lib);
     spiderweb_node.addImport("spiderweb_fs", spiderweb_fs);
 
     const lib_tests = b.addTest(.{ .root_module = lib });

@@ -1,8 +1,14 @@
-# ZiggySpiderProtocol
+# SpiderProtocol
 
 Shared Spiderweb protocol parsing/building utilities for Zig-based servers and clients.
 
-ZiggySpiderProtocol defines the unified-v2 control + Acheron filesystem protocol types, plus node runtime modules used by Spiderweb and SpiderNode.
+SpiderProtocol defines the unified-v2 control + Acheron filesystem protocol types, plus node runtime modules used by Spiderweb and SpiderNode.
+
+Official Zig module name:
+- `spider-protocol`
+
+Compatibility alias still exported:
+- `ziggy-spider-protocol`
 
 Learn more:
 - `docs/overview.md`

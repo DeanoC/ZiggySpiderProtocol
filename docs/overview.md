@@ -1,6 +1,12 @@
-# ZiggySpiderProtocol Overview
+# SpiderProtocol Overview
 
-ZiggySpiderProtocol is the shared protocol library for Spiderweb servers, clients, and node runtimes. It defines control and filesystem parsing/building, plus the node runtime modules used by Spiderweb and SpiderNode.
+SpiderProtocol is the shared protocol library for Spiderweb servers, clients, and node runtimes. It defines control and filesystem parsing/building, plus the node runtime modules used by Spiderweb and SpiderNode.
+
+Official Zig module name:
+- `spider-protocol`
+
+Compatibility alias still exported:
+- `ziggy-spider-protocol`
 
 ## What It Provides
 
