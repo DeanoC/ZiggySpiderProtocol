@@ -5,9 +5,6 @@ SpiderProtocol is the shared protocol library for Spiderweb servers, clients, an
 Official Zig module name:
 - `spider-protocol`
 
-Compatibility alias still exported:
-- `ziggy-spider-protocol`
-
 ## What It Provides
 
 - Unified-v2 control parsing and envelope builders

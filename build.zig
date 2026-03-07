@@ -9,12 +9,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    _ = b.addModule("ziggy-spider-protocol", .{
-        .root_source_file = b.path("src/lib.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const spiderweb_fs = b.addModule("spiderweb_fs", .{
         .root_source_file = b.path("src/spiderweb_fs/lib.zig"),
         .target = target,

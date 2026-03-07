@@ -1,7 +1,7 @@
 .{
-    .name = .ziggy_spider_protocol,
+    .name = .spider_protocol,
     .version = "0.1.0",
-    .fingerprint = 0x97eb9a13abee7e4e,
+    .fingerprint = 0x5b9905eb2219e0c6,
     .minimum_zig_version = "0.13.0",
     .dependencies = .{},
     .paths = .{

@@ -4,7 +4,7 @@ const types = @import("protocol_types.zig");
 pub fn buildConnectAck(allocator: std.mem.Allocator, request_id: []const u8) ![]u8 {
     return std.fmt.allocPrint(
         allocator,
-        "{{\"type\":\"connect.ack\",\"request\":\"{s}\",\"timestamp\":{d}}}",
+        "{{\"type\":\"control.connect_ack\",\"request\":\"{s}\",\"timestamp\":{d}}}",
         .{ request_id, std.time.milliTimestamp() },
     );
 }

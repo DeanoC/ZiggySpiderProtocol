@@ -7,9 +7,6 @@ SpiderProtocol defines the unified-v2 control + Acheron filesystem protocol type
 Official Zig module name:
 - `spider-protocol`
 
-Compatibility alias still exported:
-- `ziggy-spider-protocol`
-
 Learn more:
 - `docs/overview.md`
 - `docs/README.md`
