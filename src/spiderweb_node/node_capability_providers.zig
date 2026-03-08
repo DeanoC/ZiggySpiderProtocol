@@ -7,7 +7,7 @@ pub const NodeLabelArg = struct {
 };
 
 pub const ExtraServiceArg = struct {
-    service_id: []const u8,
+    venom_id: []const u8,
     service_json: []const u8,
 };
 
@@ -60,7 +60,7 @@ pub const Registry = struct {
         }
 
         for (options.extra_services) |item| {
-            try registry.addExtraService(item.service_id, item.service_json);
+            try registry.addExtraService(item.venom_id, item.service_json);
         }
 
         return registry;
@@ -88,7 +88,7 @@ pub const Registry = struct {
 
         for (self.extra_services.items) |service| {
             try copy.extra_services.append(allocator, .{
-                .service_id = try allocator.dupe(u8, service.service_id),
+                .venom_id = try allocator.dupe(u8, service.venom_id),
                 .service_json = try allocator.dupe(u8, service.service_json),
             });
         }
@@ -111,12 +111,12 @@ pub const Registry = struct {
         self.extra_services.clearRetainingCapacity();
     }
 
-    pub fn addExtraService(self: *Registry, service_id: []const u8, service_json: []const u8) !void {
-        try validateIdentifier(service_id, 128);
-        if (serviceIdExists(self, service_id)) return error.InvalidProviderConfig;
-        try validateExtraServiceJson(self.allocator, service_id, service_json);
+    pub fn addExtraService(self: *Registry, venom_id: []const u8, service_json: []const u8) !void {
+        try validateIdentifier(venom_id, 128);
+        if (serviceIdExists(self, venom_id)) return error.InvalidProviderConfig;
+        try validateExtraServiceJson(self.allocator, venom_id, service_json);
         try self.extra_services.append(self.allocator, .{
-            .service_id = try self.allocator.dupe(u8, service_id),
+            .venom_id = try self.allocator.dupe(u8, venom_id),
             .service_json = try self.allocator.dupe(u8, service_json),
         });
     }
@@ -162,7 +162,7 @@ pub const Registry = struct {
             try out.append(allocator, '}');
         }
 
-        try out.appendSlice(allocator, ",\"services\":[");
+        try out.appendSlice(allocator, ",\"venoms\":[");
         var service_count: usize = 0;
 
         if (self.enable_fs_service) {
@@ -199,11 +199,11 @@ const NodeLabel = struct {
 };
 
 const ExtraService = struct {
-    service_id: []u8,
+    venom_id: []u8,
     service_json: []u8,
 
     fn deinit(self: *ExtraService, allocator: std.mem.Allocator) void {
-        allocator.free(self.service_id);
+        allocator.free(self.venom_id);
         allocator.free(self.service_json);
         self.* = undefined;
     }
@@ -217,32 +217,32 @@ fn countRwExports(specs: []const fs_node_ops.ExportSpec) usize {
     return rw_count;
 }
 
-fn serviceIdExists(registry: *const Registry, service_id: []const u8) bool {
-    if (registry.enable_fs_service and std.mem.eql(u8, service_id, "fs")) return true;
+fn serviceIdExists(registry: *const Registry, venom_id: []const u8) bool {
+    if (registry.enable_fs_service and std.mem.eql(u8, venom_id, "fs")) return true;
     for (registry.terminal_ids.items) |terminal_id| {
         const prefix = "terminal-";
-        if (service_id.len != prefix.len + terminal_id.len) continue;
-        if (!std.mem.startsWith(u8, service_id, prefix)) continue;
-        if (std.mem.eql(u8, service_id[prefix.len..], terminal_id)) return true;
+        if (venom_id.len != prefix.len + terminal_id.len) continue;
+        if (!std.mem.startsWith(u8, venom_id, prefix)) continue;
+        if (std.mem.eql(u8, venom_id[prefix.len..], terminal_id)) return true;
     }
     for (registry.extra_services.items) |item| {
-        if (std.mem.eql(u8, item.service_id, service_id)) return true;
+        if (std.mem.eql(u8, item.venom_id, venom_id)) return true;
     }
     return false;
 }
 
 fn validateExtraServiceJson(
     allocator: std.mem.Allocator,
-    expected_service_id: []const u8,
+    expected_venom_id: []const u8,
     service_json: []const u8,
 ) !void {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, service_json, .{});
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidProviderConfig;
 
-    const service_id_val = parsed.value.object.get("service_id") orelse return error.InvalidProviderConfig;
-    if (service_id_val != .string) return error.InvalidProviderConfig;
-    if (!std.mem.eql(u8, service_id_val.string, expected_service_id)) return error.InvalidProviderConfig;
+    const venom_id_val = parsed.value.object.get("venom_id") orelse return error.InvalidProviderConfig;
+    if (venom_id_val != .string) return error.InvalidProviderConfig;
+    if (!std.mem.eql(u8, venom_id_val.string, expected_venom_id)) return error.InvalidProviderConfig;
 
     const kind_val = parsed.value.object.get("kind") orelse return error.InvalidProviderConfig;
     if (kind_val != .string or kind_val.string.len == 0) return error.InvalidProviderConfig;
@@ -266,7 +266,7 @@ fn appendFsService(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"rw\":{s},\"export_count\":{d}}},\"mounts\":[{{\"mount_id\":\"fs\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"namespace-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"fs_roots\":\"export-scoped\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin filesystem namespace driver\"}}",
+        "{{\"venom_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"rw\":{s},\"export_count\":{d}}},\"mounts\":[{{\"mount_id\":\"fs\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\"}},\"runtime\":{{\"type\":\"builtin\",\"abi\":\"venom-driver-v1\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"fs_roots\":\"export-scoped\"}},\"schema\":{{\"model\":\"namespace-mount\"}},\"help_md\":\"Builtin filesystem namespace driver\"}}",
         .{
             endpoint,
             if (registry.fs_rw_export_count > 0) "true" else "false",
@@ -287,14 +287,14 @@ fn appendTerminalService(
     const escaped_terminal_id = try jsonEscape(allocator, terminal_id);
     defer allocator.free(escaped_terminal_id);
 
-    const service_id = try std.fmt.allocPrint(allocator, "terminal-{s}", .{escaped_terminal_id});
-    defer allocator.free(service_id);
+    const venom_id = try std.fmt.allocPrint(allocator, "terminal-{s}", .{escaped_terminal_id});
+    defer allocator.free(venom_id);
     const endpoint = try std.fmt.allocPrint(allocator, "/nodes/{s}/terminal/{s}", .{ escaped_node_id, escaped_terminal_id });
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"service_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\",\"invoke\":true}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true,\"invoke\":\"control/invoke.json\",\"paths\":{{\"exec\":\"control/invoke.json\"}}}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"namespace-driver-v1\",\"entry\":\"internal-terminal-invoke\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-service-v1\"}},\"help_md\":\"Terminal namespace driver\"}}",
-        .{ service_id, endpoint, escaped_terminal_id, service_id, endpoint },
+        "{{\"venom_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\",\"invoke\":true}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true,\"invoke\":\"control/invoke.json\",\"paths\":{{\"exec\":\"control/invoke.json\"}}}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"venom-driver-v1\",\"entry\":\"internal-terminal-invoke\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-service-v1\"}},\"help_md\":\"Terminal namespace driver\"}}",
+        .{ venom_id, endpoint, escaped_terminal_id, venom_id, endpoint },
     );
 }
 
@@ -362,9 +362,9 @@ test "node_capability_providers: build service upsert payload includes fs and te
     );
     defer allocator.free(payload);
 
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"fs\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"terminal-1\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"terminal-2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"venom_id\":\"fs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"venom_id\":\"terminal-1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"venom_id\":\"terminal-2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"export_count\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"site\":\"home-lab\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"mounts\":[{\"mount_id\":\"fs\"") != null);
@@ -388,7 +388,7 @@ test "node_capability_providers: supports extra namespace service payloads" {
     defer registry.deinit();
 
     const camera_json =
-        \\{"service_id":"camera-main","kind":"camera","version":"1","state":"online","endpoints":["/nodes/node-1/camera"],"capabilities":{"still":true},"mounts":[{"mount_id":"camera-main","mount_path":"/nodes/node-1/camera","state":"online"}],"ops":{"model":"namespace","style":"plan9"},"runtime":{"type":"native_proc","abi":"namespace-driver-v1"},"permissions":{"default":"deny-by-default"},"schema":{"model":"namespace-mount"}}
+        \\{"venom_id":"camera-main","kind":"camera","version":"1","state":"online","endpoints":["/nodes/node-1/camera"],"capabilities":{"still":true},"mounts":[{"mount_id":"camera-main","mount_path":"/nodes/node-1/camera","state":"online"}],"ops":{"model":"namespace","style":"plan9"},"runtime":{"type":"native_proc","abi":"namespace-driver-v1"},"permissions":{"default":"deny-by-default"},"schema":{"model":"namespace-mount"}}
     ;
     try registry.addExtraService("camera-main", camera_json);
 
@@ -402,7 +402,7 @@ test "node_capability_providers: supports extra namespace service payloads" {
     );
     defer allocator.free(payload);
 
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"service_id\":\"camera-main\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"venom_id\":\"camera-main\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"runtime\":{\"type\":\"native_proc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"mount_path\":\"/nodes/node-1/camera\"") != null);
 }
@@ -414,10 +414,10 @@ test "node_capability_providers: rejects malformed extra service payloads" {
 
     try std.testing.expectError(
         error.InvalidProviderConfig,
-        registry.addExtraService("camera-main", "{\"service_id\":\"other\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"]}"),
+        registry.addExtraService("camera-main", "{\"venom_id\":\"other\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"]}"),
     );
     try std.testing.expectError(
         error.InvalidProviderConfig,
-        registry.addExtraService("camera-main", "{\"service_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[]}"),
+        registry.addExtraService("camera-main", "{\"venom_id\":\"camera-main\",\"kind\":\"camera\",\"state\":\"online\",\"endpoints\":[]}"),
     );
 }

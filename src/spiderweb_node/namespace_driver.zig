@@ -50,8 +50,8 @@ pub const MountDescriptor = struct {
     }
 };
 
-pub const ServiceDescriptor = struct {
-    service_id: []u8,
+pub const VenomDescriptor = struct {
+    venom_id: []u8,
     kind: []u8,
     version: []u8,
     state: ServiceState = .online,
@@ -63,8 +63,8 @@ pub const ServiceDescriptor = struct {
     help_md: ?[]u8 = null,
     mounts: std.ArrayListUnmanaged(MountDescriptor) = .{},
 
-    pub fn deinit(self: *ServiceDescriptor, allocator: std.mem.Allocator) void {
-        allocator.free(self.service_id);
+    pub fn deinit(self: *VenomDescriptor, allocator: std.mem.Allocator) void {
+        allocator.free(self.venom_id);
         allocator.free(self.kind);
         allocator.free(self.version);
         allocator.free(self.capabilities_json);
@@ -77,9 +77,9 @@ pub const ServiceDescriptor = struct {
         self.* = undefined;
     }
 
-    pub fn clone(self: *const ServiceDescriptor, allocator: std.mem.Allocator) !ServiceDescriptor {
-        var out = ServiceDescriptor{
-            .service_id = try allocator.dupe(u8, self.service_id),
+    pub fn clone(self: *const VenomDescriptor, allocator: std.mem.Allocator) !VenomDescriptor {
+        var out = VenomDescriptor{
+            .venom_id = try allocator.dupe(u8, self.venom_id),
             .kind = try allocator.dupe(u8, self.kind),
             .version = try allocator.dupe(u8, self.version),
             .state = self.state,
@@ -141,8 +141,8 @@ test "namespace_driver: runtime type names are stable" {
 
 test "namespace_driver: descriptor clone preserves mount metadata" {
     const allocator = std.testing.allocator;
-    var descriptor = ServiceDescriptor{
-        .service_id = try allocator.dupe(u8, "camera-main"),
+    var descriptor = VenomDescriptor{
+        .venom_id = try allocator.dupe(u8, "camera-main"),
         .kind = try allocator.dupe(u8, "camera"),
         .version = try allocator.dupe(u8, "1"),
         .state = .online,

@@ -141,6 +141,16 @@ test "unified_parse: parses control project op envelope" {
     try std.testing.expectEqualStrings("p1", parsed.id.?);
 }
 
+test "unified_parse: parses venom control alias envelope" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseMessage(allocator, "{\"channel\":\"control\",\"type\":\"control.venom_get\",\"id\":\"v1\"}");
+    defer parsed.deinit(allocator);
+
+    try std.testing.expectEqual(types.Channel.control, parsed.channel);
+    try std.testing.expectEqual(types.ControlType.venom_get, parsed.control_type.?);
+    try std.testing.expectEqualStrings("v1", parsed.id.?);
+}
+
 test "unified_parse: parses fsrpc walk envelope" {
     const allocator = std.testing.allocator;
     const raw =
