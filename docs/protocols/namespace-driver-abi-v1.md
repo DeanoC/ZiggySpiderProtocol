@@ -23,10 +23,11 @@ Service manifests that should expose a live executable namespace must include:
 - runtime path field for selected mode:
   - `native_proc`: `runtime.executable_path`
   - `native_inproc`: `runtime.library_path`
-  - `wasm`: `runtime.module_path`
+- `wasm`: `runtime.module_path`
 - `runtime.args` (`array<string>`, optional)
 - `runtime.timeout_ms` (`u64`, optional, default `30000`)
-- `runtime.runner_path` (`string`, optional; wasm only, defaults to `wasmtime`)
+- `runtime.fuel` (`u64`, optional; wasm only)
+- `runtime.max_memory_bytes` (`u64`, optional; wasm only)
 - `runtime.entrypoint` (`string`, optional; wasm only)
 
 If the runtime-specific path field is omitted, the service can still be
@@ -208,13 +209,50 @@ host-provided buffers.
 
 ## WASM Runtime Rules
 
-`wasm` mode executes through an external runner command:
+`wasm` mode executes through the embedded `zwasm` runtime:
 
-- default runner: `wasmtime`
-- command shape:
-  - `runner_path run [--invoke <entrypoint>] <module_path> [args...]`
-- invoke payload is written to runner stdin; stdout/stderr map to the same
-  namespace result/error files.
+- no external runner installation is required
+- `runtime.module_path` is loaded in-process
+- `runtime.entrypoint` selects the export to invoke; omit it to run `_start`
+- `runtime.args` are exposed as WASI argv
+- `runtime.fuel` limits executed instructions when supported by the module path
+- `runtime.max_memory_bytes` caps linear memory growth when supported
+- ABI-first modules can import host capabilities from module `spider_host_v1`
+- invoke payload is written to module stdin; stdout/stderr map to the same
+  namespace result/error files
+
+When present, Spiderweb first looks for the Spider Venom WASM ABI exports:
+
+- `spider_venom_abi_version`
+- `spider_venom_alloc`
+- `spider_venom_invoke_json`
+
+If those exports exist, the host invokes the module through that ABI directly.
+Otherwise it falls back to the embedded WASI stdin/stdout path.
+
+### Spider Venom Host Imports
+
+ABI-first modules can optionally import these functions from `spider_host_v1`:
+
+- `spider_host_capabilities() -> i64`
+- `spider_host_now_ms() -> i64`
+- `spider_host_log(level: i32, ptr: i32, len: i32) -> i32`
+- `spider_host_random_fill(ptr: i32, len: i32) -> i32`
+- `spider_host_emit_event_json(ptr: i32, len: i32) -> i32`
+
+Capability bits in `spider_host_capabilities()`:
+
+- bit `0`: log
+- bit `1`: clock
+- bit `2`: random
+- bit `3`: emit_event
+
+Current host behavior:
+
+- log lines are collected by the host and may be surfaced as runtime diagnostics
+- `now_ms` returns host wall-clock milliseconds
+- `random_fill` writes host-generated random bytes into guest memory
+- `emit_event_json` accepts a single JSON object payload when enabled
 
 ## Error Mapping
 

@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const default_invoke_symbol = "spiderweb_driver_v1_invoke_json";
 pub const stable_abi_name = "namespace-driver-v1";
+pub const venom_abi_name = "venom-driver-v1";
 
 pub const InprocInvokeFn = *const fn (
     payload_ptr: [*]const u8,

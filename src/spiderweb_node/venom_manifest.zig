@@ -1,11 +1,11 @@
 const std = @import("std");
 
 pub const LoadedService = struct {
-    service_id: []u8,
+    venom_id: []u8,
     service_json: []u8,
 
     pub fn deinit(self: *LoadedService, allocator: std.mem.Allocator) void {
-        allocator.free(self.service_id);
+        allocator.free(self.venom_id);
         allocator.free(self.service_json);
         self.* = undefined;
     }
@@ -26,8 +26,8 @@ pub fn loadServiceManifestFile(
     const enabled = parseOptionalBool(parsed.value.object, "enabled") orelse true;
     if (!enabled) return null;
 
-    const service_id = try dupRequiredIdentifier(allocator, parsed.value.object, "service_id", 128);
-    errdefer allocator.free(service_id);
+    const venom_id = try dupRequiredIdentifier(allocator, parsed.value.object, "venom_id", 128);
+    errdefer allocator.free(venom_id);
     const kind = try dupRequiredIdentifier(allocator, parsed.value.object, "kind", 128);
     defer allocator.free(kind);
 
@@ -38,9 +38,9 @@ pub fn loadServiceManifestFile(
 
     var endpoints = std.ArrayListUnmanaged([]u8){};
     defer freeStringList(allocator, &endpoints);
-    try parseEndpoints(allocator, parsed.value.object, node_id, service_id, &endpoints);
+    try parseEndpoints(allocator, parsed.value.object, node_id, venom_id, &endpoints);
 
-    const mounts_json = try parseMountsJson(allocator, parsed.value.object, node_id, service_id, state, endpoints.items[0]);
+    const mounts_json = try parseMountsJson(allocator, parsed.value.object, node_id, venom_id, state, endpoints.items[0]);
     defer allocator.free(mounts_json);
 
     const capabilities_json = try parseOptionalObjectJsonOrDefault(allocator, parsed.value.object, "capabilities", "{}");
@@ -56,7 +56,7 @@ pub fn loadServiceManifestFile(
         allocator,
         parsed.value.object,
         "runtime",
-        "{\"type\":\"native_proc\",\"abi\":\"namespace-driver-v1\"}",
+        "{\"type\":\"native_proc\",\"abi\":\"venom-driver-v1\"}",
     );
     defer allocator.free(runtime_json);
     const permissions_json = try parseOptionalObjectJsonOrDefault(
@@ -87,8 +87,8 @@ pub fn loadServiceManifestFile(
     const endpoints_json = try buildEndpointsJson(allocator, endpoints.items);
     defer allocator.free(endpoints_json);
 
-    const escaped_service_id = try jsonEscape(allocator, service_id);
-    defer allocator.free(escaped_service_id);
+    const escaped_venom_id = try jsonEscape(allocator, venom_id);
+    defer allocator.free(escaped_venom_id);
     const escaped_kind = try jsonEscape(allocator, kind);
     defer allocator.free(escaped_kind);
     const escaped_version = try jsonEscape(allocator, version);
@@ -101,17 +101,17 @@ pub fn loadServiceManifestFile(
         defer allocator.free(escaped_help);
         break :blk try std.fmt.allocPrint(
             allocator,
-            "{{\"service_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"invoke_template\":{s},\"help_md\":\"{s}\"}}",
-            .{ escaped_service_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, invoke_template_json, escaped_help },
+            "{{\"venom_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"invoke_template\":{s},\"help_md\":\"{s}\"}}",
+            .{ escaped_venom_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, invoke_template_json, escaped_help },
         );
     } else try std.fmt.allocPrint(
         allocator,
-        "{{\"service_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"invoke_template\":{s}}}",
-        .{ escaped_service_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, invoke_template_json },
+        "{{\"venom_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":{s},\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"invoke_template\":{s}}}",
+        .{ escaped_venom_id, escaped_kind, escaped_version, escaped_state, endpoints_json, capabilities_json, mounts_json, ops_json, runtime_json, permissions_json, schema_json, invoke_template_json },
     );
 
     return .{
-        .service_id = service_id,
+        .venom_id = venom_id,
         .service_json = service_json,
     };
 }
@@ -142,7 +142,7 @@ fn parseEndpoints(
     allocator: std.mem.Allocator,
     obj: std.json.ObjectMap,
     node_id: []const u8,
-    service_id: []const u8,
+    venom_id: []const u8,
     out: *std.ArrayListUnmanaged([]u8),
 ) !void {
     if (obj.get("endpoints")) |value| {
@@ -157,7 +157,7 @@ fn parseEndpoints(
     }
 
     if (out.items.len == 0) {
-        const fallback = try std.fmt.allocPrint(allocator, "/nodes/{s}/{s}", .{ node_id, service_id });
+        const fallback = try std.fmt.allocPrint(allocator, "/nodes/{s}/{s}", .{ node_id, venom_id });
         errdefer allocator.free(fallback);
         try out.append(allocator, fallback);
     }
@@ -167,7 +167,7 @@ fn parseMountsJson(
     allocator: std.mem.Allocator,
     obj: std.json.ObjectMap,
     node_id: []const u8,
-    service_id: []const u8,
+    venom_id: []const u8,
     default_state: []const u8,
     first_endpoint: []const u8,
 ) ![]u8 {
@@ -203,8 +203,8 @@ fn parseMountsJson(
         return rendered.toOwnedSlice(allocator);
     }
 
-    const escaped_service_id = try jsonEscape(allocator, service_id);
-    defer allocator.free(escaped_service_id);
+    const escaped_venom_id = try jsonEscape(allocator, venom_id);
+    defer allocator.free(escaped_venom_id);
     const escaped_endpoint = try jsonEscape(allocator, first_endpoint);
     defer allocator.free(escaped_endpoint);
     const escaped_state = try jsonEscape(allocator, default_state);
@@ -212,7 +212,7 @@ fn parseMountsJson(
     return std.fmt.allocPrint(
         allocator,
         "[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"{s}\"}}]",
-        .{ escaped_service_id, escaped_endpoint, escaped_state },
+        .{ escaped_venom_id, escaped_endpoint, escaped_state },
     );
 }
 
@@ -256,6 +256,18 @@ fn dupRequiredIdentifier(
     max_len: usize,
 ) ![]u8 {
     const value = getRequiredIdentifier(obj, key) orelse return error.InvalidManifest;
+    if (value.len > max_len) return error.InvalidManifest;
+    return allocator.dupe(u8, value);
+}
+
+fn dupRequiredIdentifierAlias(
+    allocator: std.mem.Allocator,
+    obj: std.json.ObjectMap,
+    primary: []const u8,
+    alias: []const u8,
+    max_len: usize,
+) ![]u8 {
+    const value = getRequiredIdentifier(obj, primary) orelse getRequiredIdentifier(obj, alias) orelse return error.InvalidManifest;
     if (value.len > max_len) return error.InvalidManifest;
     return allocator.dupe(u8, value);
 }
@@ -359,7 +371,7 @@ fn jsonEscape(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-test "service_manifest: loads enabled manifest with node_id template" {
+test "venom_manifest: loads enabled manifest with node_id template" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -369,7 +381,7 @@ test "service_manifest: loads enabled manifest with node_id template" {
         .data =
         \\{
         \\  "enabled": true,
-        \\  "service_id": "camera-main",
+        \\  "venom_id": "camera-main",
         \\  "kind": "camera",
         \\  "endpoints": ["/nodes/{node_id}/camera"],
         \\  "mounts": [{"mount_id": "camera-main", "mount_path": "/nodes/{node_id}/camera", "state": "online"}],
@@ -387,14 +399,14 @@ test "service_manifest: loads enabled manifest with node_id template" {
     var service = loaded.?;
     defer service.deinit(allocator);
 
-    try std.testing.expect(std.mem.eql(u8, service.service_id, "camera-main"));
+    try std.testing.expect(std.mem.eql(u8, service.venom_id, "camera-main"));
     try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"/nodes/node-77/camera\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"runtime\":{\"type\":\"native_proc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"invoke_template\":") != null);
     try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"capture\"") != null);
 }
 
-test "service_manifest: disabled manifest is ignored" {
+test "venom_manifest: disabled manifest is ignored" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -404,7 +416,7 @@ test "service_manifest: disabled manifest is ignored" {
         .data =
         \\{
         \\  "enabled": false,
-        \\  "service_id": "ignored",
+        \\  "venom_id": "ignored",
         \\  "kind": "camera"
         \\}
         ,
@@ -415,4 +427,33 @@ test "service_manifest: disabled manifest is ignored" {
 
     const loaded = try loadServiceManifestFile(allocator, abs, "node-77");
     try std.testing.expect(loaded == null);
+}
+
+test "venom_manifest: accepts venom_id alias and emits venom ABI metadata" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "venom.json",
+        .data =
+        \\{
+        \\  "venom_id": "doc-convert",
+        \\  "kind": "converter",
+        \\  "runtime": {"type": "native_proc", "abi": "venom-driver-v1"}
+        \\}
+        ,
+    });
+
+    const abs = try tmp.dir.realpathAlloc(allocator, "venom.json");
+    defer allocator.free(abs);
+
+    const loaded = try loadServiceManifestFile(allocator, abs, "node-22");
+    try std.testing.expect(loaded != null);
+    var service = loaded.?;
+    defer service.deinit(allocator);
+
+    try std.testing.expectEqualStrings("doc-convert", service.venom_id);
+    try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"venom_id\":\"doc-convert\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, service.service_json, "\"abi\":\"venom-driver-v1\"") != null);
 }

@@ -31,7 +31,7 @@ pub fn classifyRuntimeKind(runtime_kind: []const u8) HostContract {
         return .{
             .host_kind = .native_process,
             .runtime_kind = "native_proc",
-            .abi = "namespace-driver-v1",
+            .abi = "venom-driver-v1",
             .contract = "acheron.namespace-driver",
             .supports_supervision = true,
             .supports_hot_reload = true,
@@ -42,7 +42,7 @@ pub fn classifyRuntimeKind(runtime_kind: []const u8) HostContract {
         return .{
             .host_kind = .native_plugin,
             .runtime_kind = "native_inproc",
-            .abi = "namespace-driver-v1",
+            .abi = "venom-driver-v1",
             .contract = "acheron.namespace-driver",
             .supports_supervision = true,
             .supports_hot_reload = true,
@@ -53,7 +53,7 @@ pub fn classifyRuntimeKind(runtime_kind: []const u8) HostContract {
         return .{
             .host_kind = .wasm,
             .runtime_kind = "wasm",
-            .abi = "namespace-driver-v1",
+            .abi = "venom-driver-v1",
             .contract = "acheron.namespace-driver",
             .supports_supervision = true,
             .supports_hot_reload = true,
@@ -64,7 +64,7 @@ pub fn classifyRuntimeKind(runtime_kind: []const u8) HostContract {
     return .{
         .host_kind = .static_linked,
         .runtime_kind = if (runtime_kind.len > 0) runtime_kind else "builtin",
-        .abi = "namespace-driver-v1",
+        .abi = "venom-driver-v1",
         .contract = "acheron.namespace-driver",
         .supports_supervision = true,
         .supports_hot_reload = false,
@@ -95,4 +95,3 @@ test "service_runtime_host: classification maps known runtime kinds" {
     try std.testing.expectEqual(HostKind.wasm, classifyRuntimeKind("wasm").host_kind);
     try std.testing.expectEqual(HostKind.static_linked, classifyRuntimeKind("builtin").host_kind);
 }
-

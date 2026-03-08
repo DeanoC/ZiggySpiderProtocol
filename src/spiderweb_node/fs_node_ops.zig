@@ -8,7 +8,8 @@ const fs_windows_source_adapter = @import("fs_windows_source_adapter.zig");
 const fs_gdrive_backend = @import("fs_gdrive_backend.zig");
 const credential_store = @import("credential_store.zig");
 const service_runtime_host = @import("service_runtime_host.zig");
-const wasm_host_adapter = @import("wasm_host_adapter.zig");
+const zwasm_runtime = @import("zwasm_runtime.zig");
+const venom_contracts = @import("venom_contracts.zig");
 
 const node_id_export_shift: u6 = 48;
 const node_id_export_mask: u64 = 0xFFFF_0000_0000_0000;
@@ -24,19 +25,9 @@ const gdrive_spool_file_suffix: []const u8 = ".tmp";
 const gdrive_spool_default_limit_bytes: u64 = 512 * 1024 * 1024;
 const namespace_protocol_json =
     "{\"channel\":\"acheron\",\"version\":\"acheron-1\",\"ops\":[\"t_version\",\"t_attach\",\"t_walk\",\"t_open\",\"t_read\",\"t_write\",\"t_stat\",\"t_clunk\",\"t_flush\"]}";
-const namespace_chat_help_md =
-    "# Chat Capability\n\n" ++
-    "Write UTF-8 text to `control/input` to create a chat job.\n" ++
-    "Read `/global/jobs/<job-id>/result.txt` for assistant output.\n";
-const namespace_chat_schema_json =
-    "{\"name\":\"chat\",\"input\":\"control/input\",\"jobs\":\"/global/jobs\",\"result\":\"result.txt\"}";
-const namespace_chat_meta_json =
-    "{\"name\":\"chat\",\"version\":\"1\",\"agent_id\":\"system\",\"cost_hint\":\"provider-dependent\",\"latency_hint\":\"seconds\"}";
 const namespace_service_schema_json =
     "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
 const namespace_service_invoke_template_json = "{}";
-const namespace_service_wasm_default_runner: []const u8 = "wasmtime";
-
 const max_read_bytes: u32 = 1024 * 1024;
 const max_write_bytes: usize = 1024 * 1024;
 const namespace_service_default_timeout_ms: u64 = 30_000;
@@ -70,15 +61,16 @@ const ExportConfig = struct {
 };
 
 pub const NamespaceServiceSpec = struct {
-    service_id: []const u8,
+    venom_id: []const u8,
     runtime_kind: NamespaceServiceRuntimeKind = .native_proc,
     executable_path: ?[]const u8 = null,
     library_path: ?[]const u8 = null,
     module_path: ?[]const u8 = null,
-    wasm_runner_path: ?[]const u8 = null,
     wasm_entrypoint: ?[]const u8 = null,
     args: []const []const u8 = &.{},
     timeout_ms: u64 = namespace_service_default_timeout_ms,
+    fuel: ?u64 = null,
+    max_memory_bytes: ?u64 = null,
     help_md: ?[]const u8 = null,
     schema_json: ?[]const u8 = null,
     invoke_template_json: ?[]const u8 = null,
@@ -99,25 +91,25 @@ pub const NamespaceServiceRuntimeKind = enum {
 };
 
 const NamespaceServiceConfig = struct {
-    service_id: []u8,
+    venom_id: []u8,
     runtime_kind: NamespaceServiceRuntimeKind = .native_proc,
     executable_path: ?[]u8 = null,
     library_path: ?[]u8 = null,
     module_path: ?[]u8 = null,
-    wasm_runner_path: ?[]u8 = null,
     wasm_entrypoint: ?[]u8 = null,
     args: std.ArrayListUnmanaged([]u8) = .{},
     timeout_ms: u64 = namespace_service_default_timeout_ms,
+    fuel: ?u64 = null,
+    max_memory_bytes: ?u64 = null,
     help_md: ?[]u8 = null,
     schema_json: ?[]u8 = null,
     invoke_template_json: ?[]u8 = null,
 
     fn deinit(self: *NamespaceServiceConfig, allocator: std.mem.Allocator) void {
-        allocator.free(self.service_id);
+        allocator.free(self.venom_id);
         if (self.executable_path) |value| allocator.free(value);
         if (self.library_path) |value| allocator.free(value);
         if (self.module_path) |value| allocator.free(value);
-        if (self.wasm_runner_path) |value| allocator.free(value);
         if (self.wasm_entrypoint) |value| allocator.free(value);
         for (self.args.items) |arg| allocator.free(arg);
         self.args.deinit(allocator);
@@ -368,6 +360,42 @@ const SourceOpenResult = struct {
     stat: std.fs.File.Stat,
 };
 
+pub const NamespaceWriteSnapshot = struct {
+    source_id: []u8,
+    node_path: []u8,
+    content: []u8,
+
+    pub fn deinit(self: *NamespaceWriteSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.source_id);
+        allocator.free(self.node_path);
+        allocator.free(self.content);
+        self.* = undefined;
+    }
+};
+
+pub const ChatJobState = enum {
+    queued,
+    running,
+    done,
+    failed,
+};
+
+pub const NamespaceChatJobUpdate = struct {
+    job_id: []const u8,
+    state: ChatJobState,
+    correlation_id: ?[]const u8 = null,
+    error_text: ?[]const u8 = null,
+    result_text: []const u8 = "",
+    log_text: []const u8 = "",
+};
+
+pub const NamespaceFileUpdate = struct {
+    source_id: []const u8,
+    path: []const u8,
+    content: []const u8,
+    writable: bool = false,
+};
+
 const SourceLockMode = enum {
     shared,
     exclusive,
@@ -511,6 +539,45 @@ pub const NodeOps = struct {
         return allocator.dupe(fs_protocol.InvalidationEvent, self.pending_events.items);
     }
 
+    pub fn clearPendingEvents(self: *NodeOps) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.pending_events.clearRetainingCapacity();
+    }
+
+    pub fn captureNamespaceWriteSnapshot(
+        self: *NodeOps,
+        allocator: std.mem.Allocator,
+        handle_id: u64,
+    ) !?NamespaceWriteSnapshot {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.captureNamespaceWriteSnapshotLocked(allocator, handle_id);
+    }
+
+    pub fn upsertNamespaceChatJob(self: *NodeOps, update: NamespaceChatJobUpdate) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.upsertNamespaceChatJobLocked(update);
+    }
+
+    pub fn upsertNamespaceFile(self: *NodeOps, update: NamespaceFileUpdate) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.upsertNamespaceFileLocked(update);
+    }
+
+    pub fn readNamespaceFileContent(
+        self: *NodeOps,
+        allocator: std.mem.Allocator,
+        source_id: []const u8,
+        path: []const u8,
+    ) !?[]u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.readNamespaceFileContentLocked(allocator, source_id, path);
+    }
+
     pub fn pollFilesystemInvalidations(
         self: *NodeOps,
         allocator: std.mem.Allocator,
@@ -578,7 +645,7 @@ pub const NodeOps = struct {
         var out = std.ArrayListUnmanaged(u8){};
         errdefer out.deinit(allocator);
 
-        try out.appendSlice(allocator, "{\"schema\":1,\"services\":[");
+        try out.appendSlice(allocator, "{\"schema\":1,\"venoms\":[");
         var first = true;
 
         for (self.exports.items, 0..) |export_cfg, export_index| {
@@ -592,8 +659,8 @@ pub const NodeOps = struct {
             const status_content = namespaceFileContentByPath(ns, "/status.json") orelse "";
             const error_content = namespaceFileContentByPath(ns, "/last_error.txt") orelse "";
 
-            const escaped_service_id = try fs_protocol.jsonEscape(allocator, service_cfg.service_id);
-            defer allocator.free(escaped_service_id);
+            const escaped_venom_id = try fs_protocol.jsonEscape(allocator, service_cfg.venom_id);
+            defer allocator.free(escaped_venom_id);
             const escaped_last_control = try fs_protocol.jsonEscape(allocator, runtime.last_control_op);
             defer allocator.free(escaped_last_control);
             const escaped_config_json = try fs_protocol.jsonEscape(allocator, runtime.config_json);
@@ -608,9 +675,9 @@ pub const NodeOps = struct {
             if (!first) try out.append(allocator, ',');
             first = false;
             try out.writer(allocator).print(
-                "{{\"service_id\":\"{s}\",\"runtime\":{{\"enabled\":{},\"restarts_total\":{d},\"last_control_ms\":{d},\"last_control_op\":\"{s}\",\"config_json\":\"{s}\",\"cooldown_until_ms\":{d},\"supervision\":{{\"max_consecutive_failures\":{d},\"max_consecutive_timeouts\":{d},\"cooldown_ms\":{d},\"auto_disable_on_threshold\":{}}}}},\"stats\":{{\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}},\"result_json\":\"{s}\",\"status_json\":\"{s}\",\"last_error\":\"{s}\"}}",
+                "{{\"venom_id\":\"{s}\",\"runtime\":{{\"enabled\":{},\"restarts_total\":{d},\"last_control_ms\":{d},\"last_control_op\":\"{s}\",\"config_json\":\"{s}\",\"cooldown_until_ms\":{d},\"supervision\":{{\"max_consecutive_failures\":{d},\"max_consecutive_timeouts\":{d},\"cooldown_ms\":{d},\"auto_disable_on_threshold\":{}}}}},\"stats\":{{\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}},\"result_json\":\"{s}\",\"status_json\":\"{s}\",\"last_error\":\"{s}\"}}",
                 .{
-                    escaped_service_id,
+                    escaped_venom_id,
                     runtime.enabled,
                     runtime.restarts_total,
                     runtime.last_control_ms,
@@ -646,7 +713,7 @@ pub const NodeOps = struct {
         defer parsed.deinit();
         if (parsed.value != .object) return error.InvalidPayload;
 
-        const services_value = parsed.value.object.get("services") orelse {
+        const services_value = parsed.value.object.get("venoms") orelse parsed.value.object.get("services") orelse {
             self.namespace_runtime_state_dirty = false;
             return;
         };
@@ -654,9 +721,9 @@ pub const NodeOps = struct {
 
         for (services_value.array.items) |service_value| {
             if (service_value != .object) return error.InvalidPayload;
-            const service_id_value = service_value.object.get("service_id") orelse return error.InvalidPayload;
-            if (service_id_value != .string or service_id_value.string.len == 0) return error.InvalidPayload;
-            const export_index = self.namespaceServiceExportIndexById(service_id_value.string) orelse continue;
+            const venom_id_value = service_value.object.get("venom_id") orelse return error.InvalidPayload;
+            if (venom_id_value != .string or venom_id_value.string.len == 0) return error.InvalidPayload;
+            const export_index = self.namespaceServiceExportIndexById(venom_id_value.string) orelse continue;
 
             const runtime = try self.namespaceServiceRuntimePtr(export_index);
             const stats = try self.namespaceServiceStatsPtr(export_index);
@@ -811,14 +878,15 @@ pub const NodeOps = struct {
         var namespace_service = if (source_kind == .namespace)
             if (spec.namespace_service) |service_spec| blk: {
                 var owned = NamespaceServiceConfig{
-                    .service_id = try self.allocator.dupe(u8, service_spec.service_id),
+                    .venom_id = try self.allocator.dupe(u8, service_spec.venom_id),
                     .runtime_kind = service_spec.runtime_kind,
                     .executable_path = if (service_spec.executable_path) |value| try self.allocator.dupe(u8, value) else null,
                     .library_path = if (service_spec.library_path) |value| try self.allocator.dupe(u8, value) else null,
                     .module_path = if (service_spec.module_path) |value| try self.allocator.dupe(u8, value) else null,
-                    .wasm_runner_path = if (service_spec.wasm_runner_path) |value| try self.allocator.dupe(u8, value) else null,
                     .wasm_entrypoint = if (service_spec.wasm_entrypoint) |value| try self.allocator.dupe(u8, value) else null,
                     .timeout_ms = if (service_spec.timeout_ms == 0) namespace_service_default_timeout_ms else service_spec.timeout_ms,
+                    .fuel = service_spec.fuel,
+                    .max_memory_bytes = service_spec.max_memory_bytes,
                     .help_md = if (service_spec.help_md) |value| try self.allocator.dupe(u8, value) else null,
                     .schema_json = if (service_spec.schema_json) |value| try self.allocator.dupe(u8, value) else null,
                     .invoke_template_json = if (service_spec.invoke_template_json) |value| try self.allocator.dupe(u8, value) else null,
@@ -920,11 +988,20 @@ pub const NodeOps = struct {
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "protocol.json", .file, false, namespace_protocol_json);
         } else if (std.mem.eql(u8, export_cfg.source_id, "capabilities")) {
             const chat_dir = try self.namespaceCreateNode(export_index, &ns, root.id, "chat", .dir, false, "");
-            _ = try self.namespaceCreateNode(export_index, &ns, chat_dir, "help.md", .file, false, namespace_chat_help_md);
-            _ = try self.namespaceCreateNode(export_index, &ns, chat_dir, "schema.json", .file, false, namespace_chat_schema_json);
-            _ = try self.namespaceCreateNode(export_index, &ns, chat_dir, "meta.json", .file, false, namespace_chat_meta_json);
+            const chat_schema_json = try venom_contracts.chat.renderSchemaJson(self.allocator, "/global/jobs", null);
+            defer self.allocator.free(chat_schema_json);
+            const chat_meta_json = try venom_contracts.chat.renderMetaJson(self.allocator, .{
+                .agent_id = "system",
+                .actor_type = "",
+                .actor_id = "",
+                .project_id = "",
+            });
+            defer self.allocator.free(chat_meta_json);
+            _ = try self.namespaceCreateNode(export_index, &ns, chat_dir, "help.md", .file, false, venom_contracts.chat.export_help_md);
+            _ = try self.namespaceCreateNode(export_index, &ns, chat_dir, "schema.json", .file, false, chat_schema_json);
+            _ = try self.namespaceCreateNode(export_index, &ns, chat_dir, "meta.json", .file, false, chat_meta_json);
             const examples_dir = try self.namespaceCreateNode(export_index, &ns, chat_dir, "examples", .dir, false, "");
-            _ = try self.namespaceCreateNode(export_index, &ns, examples_dir, "send.txt", .file, false, "hello from acheron chat");
+            _ = try self.namespaceCreateNode(export_index, &ns, examples_dir, "send.txt", .file, false, venom_contracts.chat.example_send_txt);
             const control_dir = try self.namespaceCreateNode(export_index, &ns, chat_dir, "control", .dir, true, "");
             _ = try self.namespaceCreateNode(export_index, &ns, control_dir, "input", .file, true, "");
         } else if (std.mem.startsWith(u8, export_cfg.source_id, "service:")) {
@@ -972,7 +1049,7 @@ pub const NodeOps = struct {
             const health_json = if (maybe_service_cfg) |service_cfg|
                 try self.renderNamespaceServiceHealthJson(&service_cfg, runtime, stats)
             else
-                try self.allocator.dupe(u8, "{\"state\":\"offline\",\"enabled\":false,\"service_id\":\"unbound\",\"runtime\":\"none\"}");
+                try self.allocator.dupe(u8, "{\"state\":\"offline\",\"enabled\":false,\"venom_id\":\"unbound\",\"runtime\":\"none\"}");
             defer self.allocator.free(health_json);
             _ = try self.namespaceCreateNode(export_index, &ns, root.id, "health.json", .file, false, health_json);
             const control_dir = try self.namespaceCreateNode(export_index, &ns, root.id, "control", .dir, true, "");
@@ -1053,6 +1130,14 @@ pub const NodeOps = struct {
 
     fn namespaceExportFor(self: *NodeOps, export_index: usize) ?*NamespaceExport {
         return self.namespace_exports.getPtr(export_index);
+    }
+
+    fn namespaceExportIndexBySourceId(self: *const NodeOps, source_id: []const u8) ?usize {
+        for (self.exports.items, 0..) |export_cfg, idx| {
+            if (export_cfg.source_kind != .namespace) continue;
+            if (std.mem.eql(u8, export_cfg.source_id, source_id)) return idx;
+        }
+        return null;
     }
 
     fn namespaceBumpGeneration(self: *NodeOps, ns: *NamespaceExport, node_id: u64) void {
@@ -1771,9 +1856,9 @@ pub const NodeOps = struct {
             const retry_after_ms: u64 = @intCast(runtime.cooldown_until_ms - now_ms);
             const status_json = try std.fmt.allocPrint(
                 self.allocator,
-                "{{\"state\":\"backoff\",\"reason\":\"cooldown\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"retry_after_ms\":{d}}}",
+                "{{\"state\":\"backoff\",\"reason\":\"cooldown\",\"venom_id\":\"{s}\",\"runtime\":\"{s}\",\"retry_after_ms\":{d}}}",
                 .{
-                    service_cfg.service_id,
+                    service_cfg.venom_id,
                     service_cfg.runtime_kind.asString(),
                     retry_after_ms,
                 },
@@ -1800,9 +1885,9 @@ pub const NodeOps = struct {
         stats.last_started_ms = started_ms;
         const running_status = try std.fmt.allocPrint(
             self.allocator,
-            "{{\"state\":\"running\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"started_ms\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"timeout_ms\":{d}}}",
+            "{{\"state\":\"running\",\"venom_id\":\"{s}\",\"runtime\":\"{s}\",\"started_ms\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"timeout_ms\":{d}}}",
             .{
-                service_cfg.service_id,
+                service_cfg.venom_id,
                 service_cfg.runtime_kind.asString(),
                 started_ms,
                 stats.invokes_total,
@@ -1835,9 +1920,9 @@ pub const NodeOps = struct {
             try self.namespaceSetFileContent(ns, error_id, "");
             const status_json = try std.fmt.allocPrint(
                 self.allocator,
-                "{{\"state\":\"ok\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"updated_ms\":{d},\"duration_ms\":{d},\"bytes\":{d},\"exit_code\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d}}}",
+                "{{\"state\":\"ok\",\"venom_id\":\"{s}\",\"runtime\":\"{s}\",\"updated_ms\":{d},\"duration_ms\":{d},\"bytes\":{d},\"exit_code\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d}}}",
                 .{
-                    service_cfg.service_id,
+                    service_cfg.venom_id,
                     service_cfg.runtime_kind.asString(),
                     finished_ms,
                     duration_ms,
@@ -1921,11 +2006,11 @@ pub const NodeOps = struct {
             "invoke_error";
         const status_json = try std.fmt.allocPrint(
             self.allocator,
-            "{{\"state\":\"{s}\",\"reason\":\"{s}\",\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"updated_ms\":{d},\"duration_ms\":{d},\"exit_code\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"retry_after_ms\":{d}}}",
+            "{{\"state\":\"{s}\",\"reason\":\"{s}\",\"venom_id\":\"{s}\",\"runtime\":\"{s}\",\"updated_ms\":{d},\"duration_ms\":{d},\"exit_code\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"retry_after_ms\":{d}}}",
             .{
                 status_state,
                 status_reason,
-                service_cfg.service_id,
+                service_cfg.venom_id,
                 service_cfg.runtime_kind.asString(),
                 finished_ms,
                 duration_ms,
@@ -2102,19 +2187,104 @@ pub const NodeOps = struct {
         payload: []const u8,
     ) !ServiceProcessResult {
         const module_path = service_cfg.module_path orelse return error.InvalidArguments;
-        var argv = std.ArrayListUnmanaged([]const u8){};
-        defer argv.deinit(self.allocator);
-        try wasm_host_adapter.appendRunArgv(
+        const abi_output = @import("spider_venom_wasm_abi.zig").tryInvokeJsonDetailed(
+            self.allocator,
+            module_path,
+            payload,
+            max_write_bytes,
+            .{
+                .timeout_ms = service_cfg.timeout_ms,
+                .fuel = service_cfg.fuel,
+                .max_memory_bytes = service_cfg.max_memory_bytes,
+            },
+            .{},
+        ) catch |err| switch (err) {
+            error.TimeoutExceeded => return .{
+                .stdout = try self.allocator.alloc(u8, 0),
+                .stderr = try self.allocator.dupe(u8, "wasm venom timed out"),
+                .exit_code = -1,
+                .success = false,
+                .timed_out = true,
+            },
+            else => return err,
+        };
+
+        if (abi_output) |resolved_abi_output| {
+            var owned = resolved_abi_output;
+            defer owned.deinit(self.allocator);
+            const stdout = owned.output;
+            owned.output = &.{};
+            const stderr = if (try mergeAbiAuxStderr(self.allocator, &owned)) |value|
+                value
+            else
+                try self.allocator.alloc(u8, 0);
+            return .{
+                .stdout = stdout,
+                .stderr = stderr,
+                .exit_code = 0,
+                .success = true,
+                .timed_out = false,
+            };
+        }
+
+        var result = zwasm_runtime.invokeModule(
             self.allocator,
             .{
                 .module_path = module_path,
                 .entrypoint = service_cfg.wasm_entrypoint,
-                .runner_path = if (service_cfg.wasm_runner_path) |value| value else namespace_service_wasm_default_runner,
                 .args = service_cfg.args.items,
+                .timeout_ms = service_cfg.timeout_ms,
+                .fuel = service_cfg.fuel,
+                .max_memory_bytes = service_cfg.max_memory_bytes,
             },
-            &argv,
-        );
-        return self.executeNamespaceServiceCommandArgv(argv.items, payload, service_cfg.timeout_ms);
+            payload,
+            max_write_bytes,
+        ) catch |err| switch (err) {
+            error.TimeoutExceeded => return .{
+                .stdout = try self.allocator.alloc(u8, 0),
+                .stderr = try self.allocator.dupe(u8, "wasm venom timed out"),
+                .exit_code = -1,
+                .success = false,
+                .timed_out = true,
+            },
+            else => return err,
+        };
+        errdefer result.deinit(self.allocator);
+
+        return .{
+            .stdout = result.stdout,
+            .stderr = result.stderr,
+            .exit_code = result.exit_code,
+            .success = result.exit_code == 0,
+            .timed_out = false,
+        };
+    }
+
+    fn mergeAbiAuxStderr(
+        allocator: std.mem.Allocator,
+        owned: *@import("spider_venom_wasm_abi.zig").InvokeResult,
+    ) !?[]u8 {
+        const host_log_text = owned.host_log_text;
+        const event_jsonl = owned.event_jsonl;
+        owned.host_log_text = null;
+        owned.event_jsonl = null;
+
+        const trimmed_log = if (host_log_text) |value|
+            std.mem.trim(u8, value, " \t\r\n")
+        else
+            "";
+        const trimmed_events = if (event_jsonl) |value|
+            std.mem.trim(u8, value, " \t\r\n")
+        else
+            "";
+
+        defer if (host_log_text) |value| allocator.free(value);
+        defer if (event_jsonl) |value| allocator.free(value);
+
+        if (trimmed_log.len == 0 and trimmed_events.len == 0) return null;
+        if (trimmed_log.len == 0) return @as(?[]u8, try allocator.dupe(u8, trimmed_events));
+        if (trimmed_events.len == 0) return @as(?[]u8, try allocator.dupe(u8, trimmed_log));
+        return @as(?[]u8, try std.fmt.allocPrint(allocator, "{s}\n{s}", .{ trimmed_log, trimmed_events }));
     }
 
     fn collectChildOutputWithTimeout(
@@ -2212,10 +2382,10 @@ pub const NodeOps = struct {
         return self.namespace_service_runtime.getPtr(export_index).?;
     }
 
-    fn namespaceServiceExportIndexById(self: *const NodeOps, service_id: []const u8) ?usize {
+    fn namespaceServiceExportIndexById(self: *const NodeOps, venom_id: []const u8) ?usize {
         for (self.exports.items, 0..) |export_cfg, export_index| {
             const service_cfg = export_cfg.namespace_service orelse continue;
-            if (std.mem.eql(u8, service_cfg.service_id, service_id)) return export_index;
+            if (std.mem.eql(u8, service_cfg.venom_id, venom_id)) return export_index;
         }
         return null;
     }
@@ -2436,11 +2606,11 @@ pub const NodeOps = struct {
             0;
         return std.fmt.allocPrint(
             self.allocator,
-            "{{\"state\":\"{s}\",\"enabled\":{},\"service_id\":\"{s}\",\"runtime\":\"{s}\",\"timeout_ms\":{d},\"last_control_op\":\"{s}\",\"last_control_ms\":{d},\"restarts_total\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"cooldown_until_ms\":{d},\"cooldown_remaining_ms\":{d},\"supervision\":{{\"max_consecutive_failures\":{d},\"max_consecutive_timeouts\":{d},\"cooldown_ms\":{d},\"auto_disable_on_threshold\":{}}},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}}",
+            "{{\"state\":\"{s}\",\"enabled\":{},\"venom_id\":\"{s}\",\"runtime\":\"{s}\",\"timeout_ms\":{d},\"last_control_op\":\"{s}\",\"last_control_ms\":{d},\"restarts_total\":{d},\"invokes_total\":{d},\"failures_total\":{d},\"consecutive_failures\":{d},\"timeouts_total\":{d},\"consecutive_timeouts\":{d},\"cooldown_until_ms\":{d},\"cooldown_remaining_ms\":{d},\"supervision\":{{\"max_consecutive_failures\":{d},\"max_consecutive_timeouts\":{d},\"cooldown_ms\":{d},\"auto_disable_on_threshold\":{}}},\"last_duration_ms\":{d},\"last_started_ms\":{d},\"last_finished_ms\":{d},\"last_exit_code\":{d}}}",
             .{
                 state,
                 runtime.enabled,
-                service_cfg.service_id,
+                service_cfg.venom_id,
                 service_cfg.runtime_kind.asString(),
                 service_cfg.timeout_ms,
                 runtime.last_control_op,
@@ -5106,6 +5276,275 @@ pub const NodeOps = struct {
     fn queueInvalidation(self: *NodeOps, event: fs_protocol.InvalidationEvent) void {
         self.pending_events.append(self.allocator, event) catch {};
     }
+
+    fn captureNamespaceWriteSnapshotLocked(
+        self: *NodeOps,
+        allocator: std.mem.Allocator,
+        handle_id: u64,
+    ) !?NamespaceWriteSnapshot {
+        const handle = self.namespace_handles.get(handle_id) orelse return null;
+        const export_cfg = self.exports.items[handle.export_index];
+        if (export_cfg.source_kind != .namespace) return null;
+        const ns = self.namespaceExportFor(handle.export_index) orelse return null;
+        const node = ns.nodes.get(handle.node_id) orelse return null;
+        if (node.kind == .dir) return null;
+
+        return .{
+            .source_id = try allocator.dupe(u8, export_cfg.source_id),
+            .node_path = try allocator.dupe(u8, node.path),
+            .content = try allocator.dupe(u8, node.content),
+        };
+    }
+
+    fn upsertNamespaceChatJobLocked(self: *NodeOps, update: NamespaceChatJobUpdate) !void {
+        const jobs_export_index = self.namespaceExportIndexBySourceId("jobs") orelse return error.FileNotFound;
+        const ns = self.namespaceExportFor(jobs_export_index) orelse return error.FileNotFound;
+
+        const job_dir_id = if (ns.nodes.get(ns.root_id)) |root_node|
+            root_node.children.get(update.job_id)
+        else
+            null;
+
+        const ensured_job_dir_id = if (job_dir_id) |existing_id|
+            existing_id
+        else blk: {
+            const created = try self.namespaceCreateNode(
+                jobs_export_index,
+                ns,
+                ns.root_id,
+                update.job_id,
+                .dir,
+                true,
+                "",
+            );
+            self.namespaceBumpGeneration(ns, ns.root_id);
+            self.queueInvalidation(.{
+                .INVAL_DIR = .{
+                    .dir = ns.root_id,
+                    .dir_gen = null,
+                },
+            });
+            const created_node = ns.nodes.get(created) orelse return error.FileNotFound;
+            self.queueInvalidation(.{
+                .INVAL = .{
+                    .node = created,
+                    .what = .all,
+                    .gen = created_node.generation,
+                },
+            });
+            break :blk created;
+        };
+
+        const status_json = try self.buildNamespaceChatJobStatusJson(update.state, update.correlation_id, update.error_text);
+        defer self.allocator.free(status_json);
+        _ = try self.namespaceEnsureFileContent(
+            jobs_export_index,
+            ns,
+            ensured_job_dir_id,
+            "status.json",
+            status_json,
+            true,
+        );
+        _ = try self.namespaceEnsureFileContent(
+            jobs_export_index,
+            ns,
+            ensured_job_dir_id,
+            "result.txt",
+            update.result_text,
+            true,
+        );
+        _ = try self.namespaceEnsureFileContent(
+            jobs_export_index,
+            ns,
+            ensured_job_dir_id,
+            "log.txt",
+            update.log_text,
+            true,
+        );
+    }
+
+    fn upsertNamespaceFileLocked(self: *NodeOps, update: NamespaceFileUpdate) !void {
+        const export_index = self.namespaceExportIndexBySourceId(update.source_id) orelse return error.FileNotFound;
+        const ns = self.namespaceExportFor(export_index) orelse return error.FileNotFound;
+        const parent_id = try self.namespaceEnsureDirPathLocked(export_index, ns, update.path);
+        const file_name = namespaceLeafName(update.path);
+        if (file_name.len == 0) return error.FileNotFound;
+        _ = try self.namespaceEnsureFileContent(
+            export_index,
+            ns,
+            parent_id,
+            file_name,
+            update.content,
+            update.writable,
+        );
+    }
+
+    fn readNamespaceFileContentLocked(
+        self: *NodeOps,
+        allocator: std.mem.Allocator,
+        source_id: []const u8,
+        path: []const u8,
+    ) !?[]u8 {
+        const export_index = self.namespaceExportIndexBySourceId(source_id) orelse return null;
+        const ns = self.namespaceExportFor(export_index) orelse return null;
+        const node_id = try self.namespaceLookupPathLocked(ns, path) orelse return null;
+        const node = ns.nodes.get(node_id) orelse return null;
+        if (node.kind != .file) return null;
+        return try allocator.dupe(u8, node.content);
+    }
+
+    fn namespaceEnsureDirPathLocked(
+        self: *NodeOps,
+        export_index: usize,
+        ns: *NamespaceExport,
+        full_path: []const u8,
+    ) !u64 {
+        const normalized = std.mem.trim(u8, full_path, "/");
+        if (normalized.len == 0) return ns.root_id;
+
+        var parent_id = ns.root_id;
+        var it = std.mem.splitScalar(u8, normalized, '/');
+        while (it.next()) |segment| {
+            if (segment.len == 0) continue;
+            const is_leaf = it.peek() == null;
+            if (is_leaf) break;
+            if (!isValidChildName(segment)) return error.InvalidArgument;
+
+            if (ns.nodes.get(parent_id)) |parent| {
+                if (parent.children.get(segment)) |existing_id| {
+                    const existing = ns.nodes.get(existing_id) orelse return error.FileNotFound;
+                    if (existing.kind != .dir) return error.NotDir;
+                    parent_id = existing_id;
+                    continue;
+                }
+            }
+
+            const created = try self.namespaceCreateNode(export_index, ns, parent_id, segment, .dir, false, "");
+            self.namespaceBumpGeneration(ns, parent_id);
+            self.queueInvalidation(.{
+                .INVAL_DIR = .{
+                    .dir = parent_id,
+                    .dir_gen = null,
+                },
+            });
+            const created_node = ns.nodes.get(created) orelse return error.FileNotFound;
+            self.queueInvalidation(.{
+                .INVAL = .{
+                    .node = created,
+                    .what = .all,
+                    .gen = created_node.generation,
+                },
+            });
+            parent_id = created;
+        }
+        return parent_id;
+    }
+
+    fn namespaceLookupPathLocked(
+        self: *NodeOps,
+        ns: *NamespaceExport,
+        full_path: []const u8,
+    ) !?u64 {
+        _ = self;
+        const normalized = std.mem.trim(u8, full_path, "/");
+        if (normalized.len == 0) return ns.root_id;
+
+        var node_id = ns.root_id;
+        var it = std.mem.splitScalar(u8, normalized, '/');
+        while (it.next()) |segment| {
+            if (segment.len == 0) continue;
+            const node = ns.nodes.get(node_id) orelse return null;
+            node_id = node.children.get(segment) orelse return null;
+        }
+        return node_id;
+    }
+
+    fn namespaceLeafName(full_path: []const u8) []const u8 {
+        const normalized = std.mem.trim(u8, full_path, "/");
+        if (normalized.len == 0) return "";
+        return std.fs.path.basename(normalized);
+    }
+
+    fn namespaceEnsureFileContent(
+        self: *NodeOps,
+        export_index: usize,
+        ns: *NamespaceExport,
+        parent_id: u64,
+        name: []const u8,
+        content: []const u8,
+        writable: bool,
+    ) !u64 {
+        if (ns.nodes.get(parent_id)) |parent| {
+            if (parent.children.get(name)) |existing_id| {
+                const node = ns.nodes.getPtr(existing_id) orelse return error.FileNotFound;
+                if (node.kind != .file) return error.NotFile;
+                if (!std.mem.eql(u8, node.content, content)) {
+                    const replaced = try self.allocator.dupe(u8, content);
+                    self.allocator.free(node.content);
+                    node.content = replaced;
+                    self.namespaceBumpGeneration(ns, existing_id);
+                    self.queueInvalidation(.{
+                        .INVAL = .{
+                            .node = existing_id,
+                            .what = .data,
+                            .gen = node.generation,
+                        },
+                    });
+                }
+                return existing_id;
+            }
+        }
+
+        const created = try self.namespaceCreateNode(export_index, ns, parent_id, name, .file, writable, content);
+        self.namespaceBumpGeneration(ns, parent_id);
+        self.queueInvalidation(.{
+            .INVAL_DIR = .{
+                .dir = parent_id,
+                .dir_gen = null,
+            },
+        });
+        const created_node = ns.nodes.get(created) orelse return error.FileNotFound;
+        self.queueInvalidation(.{
+            .INVAL = .{
+                .node = created,
+                .what = .all,
+                .gen = created_node.generation,
+            },
+        });
+        return created;
+    }
+
+    fn buildNamespaceChatJobStatusJson(
+        self: *NodeOps,
+        state: ChatJobState,
+        correlation_id: ?[]const u8,
+        error_text: ?[]const u8,
+    ) ![]u8 {
+        const correlation_json = if (correlation_id) |value| blk: {
+            const escaped = try fs_protocol.jsonEscape(self.allocator, value);
+            defer self.allocator.free(escaped);
+            break :blk try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{escaped});
+        } else try self.allocator.dupe(u8, "null");
+        defer self.allocator.free(correlation_json);
+
+        const error_json = if (error_text) |value| blk: {
+            const escaped = try fs_protocol.jsonEscape(self.allocator, value);
+            defer self.allocator.free(escaped);
+            break :blk try std.fmt.allocPrint(self.allocator, "\"{s}\"", .{escaped});
+        } else try self.allocator.dupe(u8, "null");
+        defer self.allocator.free(error_json);
+
+        return std.fmt.allocPrint(
+            self.allocator,
+            "{{\"state\":\"{s}\",\"correlation_id\":{s},\"error\":{s},\"updated_at_ms\":{d}}}",
+            .{
+                @tagName(state),
+                correlation_json,
+                error_json,
+                std.time.milliTimestamp(),
+            },
+        );
+    }
 };
 
 fn defaultGdriveCredentialHandle(allocator: std.mem.Allocator, export_name: []const u8) ![]u8 {
@@ -6188,7 +6627,7 @@ test "fs_node_ops: namespace service reset control restores idle status files" {
             .source_id = "service:echo-main",
             .ro = false,
             .namespace_service = .{
-                .service_id = "echo-main",
+                .venom_id = "echo-main",
                 .executable_path = "echo-driver",
                 .args = &.{},
                 .help_md = "Echo service",
@@ -6197,9 +6636,9 @@ test "fs_node_ops: namespace service reset control restores idle status files" {
     });
     defer node_ops.deinit();
 
-    const service_idx = node_ops.exportByName(service_export_name).?;
-    const root_id = node_ops.exports.items[service_idx].root_node_id;
-    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const venom_idx = node_ops.exportByName(service_export_name).?;
+    const root_id = node_ops.exports.items[venom_idx].root_node_id;
+    const ns = node_ops.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
     const error_id = ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
     const result_id = ns.path_to_node.get("/result.json") orelse return error.TestExpectedResponse;
@@ -6303,7 +6742,7 @@ test "fs_node_ops: namespace service hard timeout kills process runtime" {
             .source_id = "service:timeout",
             .ro = false,
             .namespace_service = .{
-                .service_id = "timeout-test",
+                .venom_id = "timeout-test",
                 .runtime_kind = .native_proc,
                 .executable_path = runtime_exe,
                 .args = runtime_args,
@@ -6314,9 +6753,9 @@ test "fs_node_ops: namespace service hard timeout kills process runtime" {
     });
     defer node_ops.deinit();
 
-    const service_idx = node_ops.exportByName("svc-timeout").?;
-    const root_id = node_ops.exports.items[service_idx].root_node_id;
-    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const venom_idx = node_ops.exportByName("svc-timeout").?;
+    const root_id = node_ops.exports.items[venom_idx].root_node_id;
+    const ns = node_ops.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
     const error_id = ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
     const metrics_id = ns.path_to_node.get("/metrics.json") orelse return error.TestExpectedResponse;
@@ -6405,7 +6844,7 @@ test "fs_node_ops: namespace service runtime control files manage service state"
             .source_id = "service:control",
             .ro = false,
             .namespace_service = .{
-                .service_id = "control-test",
+                .venom_id = "control-test",
                 .runtime_kind = .native_proc,
                 .executable_path = runtime_exe,
                 .args = runtime_args,
@@ -6416,8 +6855,8 @@ test "fs_node_ops: namespace service runtime control files manage service state"
     });
     defer node_ops.deinit();
 
-    const service_idx = node_ops.exportByName("svc-control").?;
-    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const venom_idx = node_ops.exportByName("svc-control").?;
+    const ns = node_ops.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const disable_id = ns.path_to_node.get("/control/disable") orelse return error.TestExpectedResponse;
     const enable_id = ns.path_to_node.get("/control/enable") orelse return error.TestExpectedResponse;
     const restart_id = ns.path_to_node.get("/control/restart") orelse return error.TestExpectedResponse;
@@ -6701,10 +7140,27 @@ fn buildRuntimeConformanceFixtures(allocator: std.mem.Allocator) !RuntimeConform
     errdefer allocator.free(inproc_library_path);
     const wasm_module_path = try std.fs.path.join(allocator, &.{ root_path, "runtime_fixture.wasm" });
     errdefer allocator.free(wasm_module_path);
+    const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{wasm_module_path});
+    defer allocator.free(emit_arg);
 
     try writeAbsoluteTestFile(runner_source_path, runner_source);
     try writeAbsoluteTestFile(inproc_source_path, inproc_source);
-    try writeAbsoluteTestFile(wasm_module_path, "\x00asm\x01\x00\x00\x00");
+    const wasm_source =
+        "var input_buf: [4096]u8 = undefined;\n" ++
+        "var output_buf: [4096]u8 = undefined;\n" ++
+        "pub export fn spider_venom_abi_version() u32 { return 1; }\n" ++
+        "pub export fn spider_venom_alloc(len: u32) u32 {\n" ++
+        "  if (len > input_buf.len) return 0;\n" ++
+        "  return @intCast(@intFromPtr(&input_buf));\n" ++
+        "}\n" ++
+        "pub export fn spider_venom_invoke_json(ptr: u32, len: u32) u64 {\n" ++
+        "  _ = ptr;\n" ++
+        "  @memcpy(output_buf[0..len], input_buf[0..len]);\n" ++
+        "  const out_ptr: u32 = @intCast(@intFromPtr(&output_buf));\n" ++
+        "  return (@as(u64, len) << 32) | out_ptr;\n" ++
+        "}\n";
+    const wasm_source_path = try std.fs.path.join(allocator, &.{ root_path, "runtime_wasm_echo.zig" });
+    defer allocator.free(wasm_source_path);
 
     try runFixtureCommand(allocator, &.{
         zig_cmd,
@@ -6716,6 +7172,20 @@ fn buildRuntimeConformanceFixtures(allocator: std.mem.Allocator) !RuntimeConform
         runner_source_path,
         "-o",
         runner_exe_path,
+    });
+    try writeAbsoluteTestFile(wasm_source_path, wasm_source);
+    try runFixtureCommand(allocator, &.{
+        zig_cmd,
+        "build-exe",
+        "-target",
+        "wasm32-freestanding",
+        "-fno-entry",
+        "-rdynamic",
+        "-fexport-memory",
+        "-O",
+        "Debug",
+        wasm_source_path,
+        emit_arg,
     });
 
     var shared_lib_args = std.ArrayListUnmanaged([]const u8){};
@@ -6768,7 +7238,7 @@ test "fs_node_ops: runtime invoke parity across native_proc native_inproc wasm" 
     const payload = "{\"ping\":\"runtime\"}";
 
     var native_proc_cfg = NamespaceServiceConfig{
-        .service_id = try allocator.dupe(u8, "svc-native-proc"),
+        .venom_id = try allocator.dupe(u8, "svc-native-proc"),
         .runtime_kind = .native_proc,
         .executable_path = try allocator.dupe(u8, fixtures.runner_exe_path),
         .timeout_ms = 5_000,
@@ -6776,7 +7246,7 @@ test "fs_node_ops: runtime invoke parity across native_proc native_inproc wasm" 
     defer native_proc_cfg.deinit(allocator);
 
     var native_inproc_cfg = NamespaceServiceConfig{
-        .service_id = try allocator.dupe(u8, "svc-native-inproc"),
+        .venom_id = try allocator.dupe(u8, "svc-native-inproc"),
         .runtime_kind = .native_inproc,
         .library_path = try allocator.dupe(u8, fixtures.inproc_library_path),
         .timeout_ms = 5_000,
@@ -6784,11 +7254,9 @@ test "fs_node_ops: runtime invoke parity across native_proc native_inproc wasm" 
     defer native_inproc_cfg.deinit(allocator);
 
     var wasm_cfg = NamespaceServiceConfig{
-        .service_id = try allocator.dupe(u8, "svc-wasm"),
+        .venom_id = try allocator.dupe(u8, "svc-wasm"),
         .runtime_kind = .wasm,
         .module_path = try allocator.dupe(u8, fixtures.wasm_module_path),
-        .wasm_runner_path = try allocator.dupe(u8, fixtures.runner_exe_path),
-        .wasm_entrypoint = try allocator.dupe(u8, "invoke"),
         .timeout_ms = 5_000,
     };
     defer wasm_cfg.deinit(allocator);
@@ -6831,7 +7299,7 @@ test "fs_node_ops: namespace supervision cooldown gates repeated invoke" {
             .source_id = "service:cooldown",
             .ro = false,
             .namespace_service = .{
-                .service_id = "cooldown-test",
+                .venom_id = "cooldown-test",
                 .runtime_kind = .native_proc,
                 .executable_path = runtime_exe,
                 .args = runtime_args,
@@ -6841,8 +7309,8 @@ test "fs_node_ops: namespace supervision cooldown gates repeated invoke" {
     });
     defer node_ops.deinit();
 
-    const service_idx = node_ops.exportByName("svc-cooldown").?;
-    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const venom_idx = node_ops.exportByName("svc-cooldown").?;
+    const ns = node_ops.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const config_id = ns.path_to_node.get("/config.json") orelse return error.TestExpectedResponse;
     const invoke_id = ns.path_to_node.get("/control/invoke.json") orelse return error.TestExpectedResponse;
     const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
@@ -6853,17 +7321,17 @@ test "fs_node_ops: namespace supervision cooldown gates repeated invoke" {
         config_id,
         "{\"supervision\":{\"cooldown_ms\":60000,\"auto_disable_on_threshold\":false}}",
     );
-    try node_ops.maybeInvokeNamespaceServiceControl(service_idx, ns, config_id);
+    try node_ops.maybeInvokeNamespaceServiceControl(venom_idx, ns, config_id);
     try node_ops.namespaceSetFileContent(ns, invoke_id, "{}");
-    try node_ops.maybeInvokeNamespaceServiceControl(service_idx, ns, invoke_id);
-    try std.testing.expectError(error.WouldBlock, node_ops.maybeInvokeNamespaceServiceControl(service_idx, ns, invoke_id));
+    try node_ops.maybeInvokeNamespaceServiceControl(venom_idx, ns, invoke_id);
+    try std.testing.expectError(error.WouldBlock, node_ops.maybeInvokeNamespaceServiceControl(venom_idx, ns, invoke_id));
 
     const status_node = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
     const health_node = ns.nodes.get(health_id) orelse return error.TestExpectedResponse;
     try std.testing.expect(std.mem.indexOf(u8, status_node.content, "\"state\":\"backoff\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, health_node.content, "\"cooldown_remaining_ms\":") != null);
 
-    const runtime = node_ops.namespace_service_runtime.get(service_idx) orelse return error.TestExpectedResponse;
+    const runtime = node_ops.namespace_service_runtime.get(venom_idx) orelse return error.TestExpectedResponse;
     try std.testing.expect(runtime.enabled);
 }
 
@@ -6883,7 +7351,7 @@ test "fs_node_ops: namespace supervision auto-disables after failure threshold" 
             .source_id = "service:auto-disable",
             .ro = false,
             .namespace_service = .{
-                .service_id = "auto-disable-test",
+                .venom_id = "auto-disable-test",
                 .runtime_kind = .native_proc,
                 .executable_path = runtime_exe,
                 .args = runtime_args,
@@ -6893,8 +7361,8 @@ test "fs_node_ops: namespace supervision auto-disables after failure threshold" 
     });
     defer node_ops.deinit();
 
-    const service_idx = node_ops.exportByName("svc-auto-disable").?;
-    const ns = node_ops.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const venom_idx = node_ops.exportByName("svc-auto-disable").?;
+    const ns = node_ops.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const config_id = ns.path_to_node.get("/config.json") orelse return error.TestExpectedResponse;
     const invoke_id = ns.path_to_node.get("/control/invoke.json") orelse return error.TestExpectedResponse;
     const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
@@ -6905,11 +7373,11 @@ test "fs_node_ops: namespace supervision auto-disables after failure threshold" 
         config_id,
         "{\"supervision\":{\"max_consecutive_failures\":1}}",
     );
-    try node_ops.maybeInvokeNamespaceServiceControl(service_idx, ns, config_id);
+    try node_ops.maybeInvokeNamespaceServiceControl(venom_idx, ns, config_id);
     try node_ops.namespaceSetFileContent(ns, invoke_id, "{}");
-    try node_ops.maybeInvokeNamespaceServiceControl(service_idx, ns, invoke_id);
+    try node_ops.maybeInvokeNamespaceServiceControl(venom_idx, ns, invoke_id);
 
-    const runtime = node_ops.namespace_service_runtime.get(service_idx) orelse return error.TestExpectedResponse;
+    const runtime = node_ops.namespace_service_runtime.get(venom_idx) orelse return error.TestExpectedResponse;
     try std.testing.expect(!runtime.enabled);
 
     const status_node = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
@@ -6936,7 +7404,7 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
             .source_id = "service:runtime-roundtrip",
             .ro = false,
             .namespace_service = .{
-                .service_id = "runtime-roundtrip",
+                .venom_id = "runtime-roundtrip",
                 .runtime_kind = .native_proc,
                 .executable_path = runtime_exe,
                 .args = runtime_args,
@@ -6946,8 +7414,8 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
     });
     defer src.deinit();
 
-    const service_idx = src.exportByName("svc-runtime-roundtrip").?;
-    const ns = src.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const venom_idx = src.exportByName("svc-runtime-roundtrip").?;
+    const ns = src.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const config_id = ns.path_to_node.get("/config.json") orelse return error.TestExpectedResponse;
     const invoke_id = ns.path_to_node.get("/control/invoke.json") orelse return error.TestExpectedResponse;
     const status_id = ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
@@ -6958,9 +7426,9 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
         config_id,
         "{\"supervision\":{\"max_consecutive_failures\":2,\"cooldown_ms\":12345,\"auto_disable_on_threshold\":false}}",
     );
-    try src.maybeInvokeNamespaceServiceControl(service_idx, ns, config_id);
+    try src.maybeInvokeNamespaceServiceControl(venom_idx, ns, config_id);
     try src.namespaceSetFileContent(ns, invoke_id, "{\"ping\":\"runtime\"}");
-    try src.maybeInvokeNamespaceServiceControl(service_idx, ns, invoke_id);
+    try src.maybeInvokeNamespaceServiceControl(venom_idx, ns, invoke_id);
 
     const status_before = ns.nodes.get(status_id) orelse return error.TestExpectedResponse;
     const error_before = ns.nodes.get(error_id) orelse return error.TestExpectedResponse;
@@ -6971,7 +7439,8 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
     defer allocator.free(snapshot);
     try std.testing.expect(src.takeNamespaceRuntimeStateDirty());
     try std.testing.expect(!src.takeNamespaceRuntimeStateDirty());
-    try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"service_id\":\"runtime-roundtrip\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"venom_id\":\"runtime-roundtrip\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"venoms\":[") != null);
 
     var dst = try NodeOps.init(allocator, &[_]ExportSpec{
         .{
@@ -6981,7 +7450,7 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
             .source_id = "service:runtime-roundtrip",
             .ro = false,
             .namespace_service = .{
-                .service_id = "runtime-roundtrip",
+                .venom_id = "runtime-roundtrip",
                 .runtime_kind = .native_proc,
                 .executable_path = runtime_exe,
                 .args = runtime_args,
@@ -6994,15 +7463,15 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
     try dst.restoreNamespaceRuntimeStateJson(snapshot);
     try std.testing.expect(!dst.takeNamespaceRuntimeStateDirty());
 
-    const restored_runtime = dst.namespace_service_runtime.get(service_idx) orelse return error.TestExpectedResponse;
-    const restored_stats = dst.namespace_service_stats.get(service_idx) orelse return error.TestExpectedResponse;
+    const restored_runtime = dst.namespace_service_runtime.get(venom_idx) orelse return error.TestExpectedResponse;
+    const restored_stats = dst.namespace_service_stats.get(venom_idx) orelse return error.TestExpectedResponse;
     try std.testing.expect(restored_runtime.enabled);
     try std.testing.expectEqual(@as(u64, 2), restored_runtime.supervision.max_consecutive_failures);
     try std.testing.expectEqual(@as(u64, 12345), restored_runtime.supervision.cooldown_ms);
     try std.testing.expect(restored_stats.invokes_total >= 1);
     try std.testing.expect(restored_stats.failures_total >= 1);
 
-    const restored_ns = dst.namespace_exports.getPtr(service_idx) orelse return error.TestExpectedResponse;
+    const restored_ns = dst.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
     const restored_status_id = restored_ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
     const restored_error_id = restored_ns.path_to_node.get("/last_error.txt") orelse return error.TestExpectedResponse;
     const restored_health_id = restored_ns.path_to_node.get("/health.json") orelse return error.TestExpectedResponse;
@@ -7011,7 +7480,34 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
     const restored_health = restored_ns.nodes.get(restored_health_id) orelse return error.TestExpectedResponse;
     try std.testing.expect(std.mem.indexOf(u8, restored_status.content, "\"state\":\"error\"") != null);
     try std.testing.expect(restored_error.content.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, restored_health.content, "\"service_id\":\"runtime-roundtrip\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, restored_health.content, "\"venom_id\":\"runtime-roundtrip\"") != null);
+
+    const legacy_snapshot = try std.mem.replaceOwned(u8, allocator, snapshot, "\"venoms\":[", "\"services\":[");
+    defer allocator.free(legacy_snapshot);
+
+    var legacy = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = "svc-runtime-roundtrip",
+            .path = "service:runtime-roundtrip",
+            .source_kind = .namespace,
+            .source_id = "service:runtime-roundtrip",
+            .ro = false,
+            .namespace_service = .{
+                .venom_id = "runtime-roundtrip",
+                .runtime_kind = .native_proc,
+                .executable_path = runtime_exe,
+                .args = runtime_args,
+                .timeout_ms = 2_000,
+            },
+        },
+    });
+    defer legacy.deinit();
+
+    try legacy.restoreNamespaceRuntimeStateJson(legacy_snapshot);
+    const legacy_ns = legacy.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
+    const legacy_status_id = legacy_ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const legacy_status = legacy_ns.nodes.get(legacy_status_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, legacy_status.content, "\"state\":\"error\"") != null);
 }
 
 test "fs_node_ops: gdrive scaffold supports read path and guards writes" {

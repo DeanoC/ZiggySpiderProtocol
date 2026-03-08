@@ -3,7 +3,12 @@
     .version = "0.1.0",
     .fingerprint = 0x5b9905eb2219e0c6,
     .minimum_zig_version = "0.13.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .zwasm = .{
+            .url = "https://github.com/DeanoC/zwasm/archive/62fe06f44a26e091ffd8c17a32c727f6320b83c0.tar.gz",
+            .hash = "zwasm-1.5.0-IBbzF2OIIwASv9vXqr-jE7LDtT9HllJDYBESTG9RVjgR",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

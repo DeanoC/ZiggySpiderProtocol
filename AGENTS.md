@@ -39,7 +39,7 @@ This repository is part of the Ziggy* codebase and is primarily a Zig project.
 ## Branch Protection And Review Gate
 - Direct pushes to the default branch are not allowed.
 - All changes that update the default branch must go through a pull request.
-- Shared policy source of truth: https://github.com/DeanoC/ZiggySpiderweb/blob/main/docs/review-policy.md
+- Shared policy source of truth: https://github.com/DeanoC/Spiderweb/blob/main/docs/review-policy.md
 - `chatgpt-codex-connector` review is required before merge, and all Codex threads must be resolved.
 - If Codex reports any `P1`, push a fix and request follow-up with `@codex review` before merge.
 - For each `P2`/`P3`, open or link a GitHub issue and link it in the PR.

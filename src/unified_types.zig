@@ -36,9 +36,11 @@ pub const ControlType = enum {
     node_join_approve,
     node_join_deny,
     node_join,
+    node_ensure,
     node_lease_refresh,
-    node_service_upsert,
-    node_service_get,
+    venom_bind,
+    venom_upsert,
+    venom_get,
     agent_list,
     agent_get,
     node_list,
@@ -196,9 +198,11 @@ pub fn controlTypeFromString(value: []const u8) ControlType {
     if (std.mem.eql(u8, value, "control.node_join_approve")) return .node_join_approve;
     if (std.mem.eql(u8, value, "control.node_join_deny")) return .node_join_deny;
     if (std.mem.eql(u8, value, "control.node_join")) return .node_join;
+    if (std.mem.eql(u8, value, "control.node_ensure")) return .node_ensure;
     if (std.mem.eql(u8, value, "control.node_lease_refresh")) return .node_lease_refresh;
-    if (std.mem.eql(u8, value, "control.node_service_upsert")) return .node_service_upsert;
-    if (std.mem.eql(u8, value, "control.node_service_get")) return .node_service_get;
+    if (std.mem.eql(u8, value, "control.venom_bind")) return .venom_bind;
+    if (std.mem.eql(u8, value, "control.venom_upsert")) return .venom_upsert;
+    if (std.mem.eql(u8, value, "control.venom_get")) return .venom_get;
     if (std.mem.eql(u8, value, "control.agent_list")) return .agent_list;
     if (std.mem.eql(u8, value, "control.agent_get")) return .agent_get;
     if (std.mem.eql(u8, value, "control.node_list")) return .node_list;
@@ -323,9 +327,11 @@ pub fn controlTypeName(value: ControlType) []const u8 {
         .node_join_approve => "control.node_join_approve",
         .node_join_deny => "control.node_join_deny",
         .node_join => "control.node_join",
+        .node_ensure => "control.node_ensure",
         .node_lease_refresh => "control.node_lease_refresh",
-        .node_service_upsert => "control.node_service_upsert",
-        .node_service_get => "control.node_service_get",
+        .venom_bind => "control.venom_bind",
+        .venom_upsert => "control.venom_upsert",
+        .venom_get => "control.venom_get",
         .agent_list => "control.agent_list",
         .agent_get => "control.agent_get",
         .node_list => "control.node_list",
@@ -436,7 +442,10 @@ test "unified_types: v2 control names round-trip as canonical strings" {
     try std.testing.expectEqual(ControlType.session_history, controlTypeFromString(controlTypeName(.session_history)));
     try std.testing.expectEqual(ControlType.node_join_request, controlTypeFromString(controlTypeName(.node_join_request)));
     try std.testing.expectEqual(ControlType.node_join_approve, controlTypeFromString(controlTypeName(.node_join_approve)));
-    try std.testing.expectEqual(ControlType.node_service_upsert, controlTypeFromString(controlTypeName(.node_service_upsert)));
+    try std.testing.expectEqual(ControlType.node_ensure, controlTypeFromString(controlTypeName(.node_ensure)));
+    try std.testing.expectEqual(ControlType.venom_bind, controlTypeFromString(controlTypeName(.venom_bind)));
+    try std.testing.expectEqual(ControlType.venom_upsert, controlTypeFromString(controlTypeName(.venom_upsert)));
+    try std.testing.expectEqual(ControlType.venom_get, controlTypeFromString(controlTypeName(.venom_get)));
     try std.testing.expectEqual(ControlType.agent_list, controlTypeFromString(controlTypeName(.agent_list)));
     try std.testing.expectEqual(ControlType.agent_get, controlTypeFromString(controlTypeName(.agent_get)));
     try std.testing.expectEqual(ControlType.project_mount_set, controlTypeFromString(controlTypeName(.project_mount_set)));

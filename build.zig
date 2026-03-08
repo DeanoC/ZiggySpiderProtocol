@@ -3,6 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const zwasm = b.dependency("zwasm", .{
+        .target = target,
+        .optimize = optimize,
+        .jit = false,
+    });
 
     const lib = b.addModule("spider-protocol", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -23,6 +28,7 @@ pub fn build(b: *std.Build) void {
     });
     spiderweb_node.addImport("spider-protocol", lib);
     spiderweb_node.addImport("spiderweb_fs", spiderweb_fs);
+    spiderweb_node.addImport("zwasm", zwasm.module("zwasm"));
 
     const lib_tests = b.addTest(.{ .root_module = lib });
     const run_lib_tests = b.addRunArtifact(lib_tests);
