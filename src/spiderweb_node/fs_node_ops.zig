@@ -645,7 +645,7 @@ pub const NodeOps = struct {
         var out = std.ArrayListUnmanaged(u8){};
         errdefer out.deinit(allocator);
 
-        try out.appendSlice(allocator, "{\"schema\":1,\"services\":[");
+        try out.appendSlice(allocator, "{\"schema\":1,\"venoms\":[");
         var first = true;
 
         for (self.exports.items, 0..) |export_cfg, export_index| {
@@ -713,7 +713,7 @@ pub const NodeOps = struct {
         defer parsed.deinit();
         if (parsed.value != .object) return error.InvalidPayload;
 
-        const services_value = parsed.value.object.get("venoms") orelse {
+        const services_value = parsed.value.object.get("venoms") orelse parsed.value.object.get("services") orelse {
             self.namespace_runtime_state_dirty = false;
             return;
         };
@@ -7440,6 +7440,7 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
     try std.testing.expect(src.takeNamespaceRuntimeStateDirty());
     try std.testing.expect(!src.takeNamespaceRuntimeStateDirty());
     try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"venom_id\":\"runtime-roundtrip\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot, "\"venoms\":[") != null);
 
     var dst = try NodeOps.init(allocator, &[_]ExportSpec{
         .{
@@ -7480,6 +7481,33 @@ test "fs_node_ops: namespace runtime state snapshot roundtrip restores controls 
     try std.testing.expect(std.mem.indexOf(u8, restored_status.content, "\"state\":\"error\"") != null);
     try std.testing.expect(restored_error.content.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, restored_health.content, "\"venom_id\":\"runtime-roundtrip\"") != null);
+
+    const legacy_snapshot = try std.mem.replaceOwned(u8, allocator, snapshot, "\"venoms\":[", "\"services\":[");
+    defer allocator.free(legacy_snapshot);
+
+    var legacy = try NodeOps.init(allocator, &[_]ExportSpec{
+        .{
+            .name = "svc-runtime-roundtrip",
+            .path = "service:runtime-roundtrip",
+            .source_kind = .namespace,
+            .source_id = "service:runtime-roundtrip",
+            .ro = false,
+            .namespace_service = .{
+                .venom_id = "runtime-roundtrip",
+                .runtime_kind = .native_proc,
+                .executable_path = runtime_exe,
+                .args = runtime_args,
+                .timeout_ms = 2_000,
+            },
+        },
+    });
+    defer legacy.deinit();
+
+    try legacy.restoreNamespaceRuntimeStateJson(legacy_snapshot);
+    const legacy_ns = legacy.namespace_exports.getPtr(venom_idx) orelse return error.TestExpectedResponse;
+    const legacy_status_id = legacy_ns.path_to_node.get("/status.json") orelse return error.TestExpectedResponse;
+    const legacy_status = legacy_ns.nodes.get(legacy_status_id) orelse return error.TestExpectedResponse;
+    try std.testing.expect(std.mem.indexOf(u8, legacy_status.content, "\"state\":\"error\"") != null);
 }
 
 test "fs_node_ops: gdrive scaffold supports read path and guards writes" {
