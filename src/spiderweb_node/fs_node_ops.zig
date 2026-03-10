@@ -25,9 +25,8 @@ const gdrive_spool_file_suffix: []const u8 = ".tmp";
 const gdrive_spool_default_limit_bytes: u64 = 512 * 1024 * 1024;
 const namespace_protocol_json =
     "{\"channel\":\"acheron\",\"version\":\"acheron-1\",\"ops\":[\"t_version\",\"t_attach\",\"t_walk\",\"t_open\",\"t_read\",\"t_write\",\"t_stat\",\"t_clunk\",\"t_flush\"]}";
-const namespace_venom_schema_json =
-    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
-const namespace_venom_invoke_template_json = "{}";
+const namespace_venom_schema_json = venom_contracts.namespace_service.descriptor_schema_json;
+const namespace_venom_invoke_template_json = venom_contracts.namespace_service.default_invoke_template_json;
 const max_read_bytes: u32 = 1024 * 1024;
 const max_write_bytes: usize = 1024 * 1024;
 const namespace_venom_default_timeout_ms: u64 = 30_000;

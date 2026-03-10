@@ -15,6 +15,7 @@ pub const VenomDescriptor = struct {
     runtime_json: []u8,
     permissions_json: []u8,
     schema_json: []u8,
+    invoke_template_json: ?[]u8 = null,
     help_md: ?[]u8 = null,
     endpoints: std.ArrayListUnmanaged([]u8) = .{},
 
@@ -29,6 +30,7 @@ pub const VenomDescriptor = struct {
         allocator.free(self.runtime_json);
         allocator.free(self.permissions_json);
         allocator.free(self.schema_json);
+        if (self.invoke_template_json) |value| allocator.free(value);
         if (self.help_md) |value| allocator.free(value);
         for (self.endpoints.items) |endpoint| allocator.free(endpoint);
         self.endpoints.deinit(allocator);
@@ -48,6 +50,12 @@ pub fn venomDigest64(service: VenomDescriptor) u64 {
     hashField(&hasher, service.runtime_json);
     hashField(&hasher, service.permissions_json);
     hashField(&hasher, service.schema_json);
+    if (service.invoke_template_json) |invoke_template| {
+        hasher.update(&.{1});
+        hashField(&hasher, invoke_template);
+    } else {
+        hasher.update(&.{0});
+    }
     if (service.help_md) |help| {
         hasher.update(&.{1});
         hashField(&hasher, help);
@@ -139,6 +147,10 @@ pub fn replaceVenomsFromJsonValue(
                 try encodeObjectValue(allocator, schema_value)
             else
                 try allocator.dupe(u8, "{}"),
+            .invoke_template_json = if (obj.get("invoke_template")) |invoke_template_value|
+                try encodeOptionalObjectValue(allocator, invoke_template_value)
+            else
+                null,
             .help_md = if (obj.get("help_md")) |help_value| blk: {
                 if (help_value != .string) return Error.InvalidPayload;
                 if (help_value.string.len == 0 or help_value.string.len > 64 * 1024) return Error.InvalidPayload;
@@ -190,7 +202,7 @@ pub fn appendVenomJson(
         const escaped_help = try jsonEscape(allocator, help);
         defer allocator.free(escaped_help);
         try out.writer(allocator).print(
-            "],\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s},\"help_md\":\"{s}\"}}",
+            "],\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s}",
             .{
                 service.capabilities_json,
                 service.mounts_json,
@@ -198,13 +210,16 @@ pub fn appendVenomJson(
                 service.runtime_json,
                 service.permissions_json,
                 service.schema_json,
-                escaped_help,
             },
         );
+        if (service.invoke_template_json) |invoke_template| {
+            try out.writer(allocator).print(",\"invoke_template\":{s}", .{invoke_template});
+        }
+        try out.writer(allocator).print(",\"help_md\":\"{s}\"}}", .{escaped_help});
         return;
     }
     try out.writer(allocator).print(
-        "],\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s}}}",
+        "],\"capabilities\":{s},\"mounts\":{s},\"ops\":{s},\"runtime\":{s},\"permissions\":{s},\"schema\":{s}",
         .{
             service.capabilities_json,
             service.mounts_json,
@@ -214,6 +229,10 @@ pub fn appendVenomJson(
             service.schema_json,
         },
     );
+    if (service.invoke_template_json) |invoke_template| {
+        try out.writer(allocator).print(",\"invoke_template\":{s}", .{invoke_template});
+    }
+    try out.appendSlice(allocator, "}}");
 }
 
 fn getRequiredString(obj: std.json.ObjectMap, name: []const u8) []const u8 {
@@ -236,6 +255,12 @@ fn encodeCapabilitiesValue(allocator: std.mem.Allocator, raw: std.json.Value) ![
 fn encodeObjectValue(allocator: std.mem.Allocator, raw: std.json.Value) ![]u8 {
     if (raw != .object) return Error.InvalidPayload;
     return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(raw, .{})});
+}
+
+fn encodeOptionalObjectValue(allocator: std.mem.Allocator, raw: std.json.Value) !?[]u8 {
+    if (raw != .object) return Error.InvalidPayload;
+    const rendered = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(raw, .{})});
+    return rendered;
 }
 
 fn encodeMountsValue(allocator: std.mem.Allocator, raw: std.json.Value) ![]u8 {
@@ -319,6 +344,7 @@ test "venom_catalog: parses and re-renders venoms array" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"capabilities\":{\"rw\":true}") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"mounts\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"runtime\":{}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"invoke_template\":") == null);
 }
 
 test "venom_catalog: accepts optional namespace metadata fields" {
@@ -327,7 +353,7 @@ test "venom_catalog: accepts optional namespace metadata fields" {
     var parsed = try std.json.parseFromSlice(
         std.json.Value,
         allocator,
-        "[{\"venom_id\":\"camera-main\",\"kind\":\"camera\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"capabilities\":{\"still\":true},\"mounts\":[{\"mount_id\":\"camera-main\",\"mount_path\":\"/nodes/node-1/camera\",\"state\":\"online\"}],\"ops\":{\"model\":\"namespace\"},\"runtime\":{\"type\":\"native_proc\"},\"permissions\":{\"default\":\"deny-by-default\"},\"schema\":{\"model\":\"namespace-mount\"},\"help_md\":\"Camera driver\"}]",
+        "[{\"venom_id\":\"camera-main\",\"kind\":\"camera\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"capabilities\":{\"still\":true},\"mounts\":[{\"mount_id\":\"camera-main\",\"mount_path\":\"/nodes/node-1/camera\",\"state\":\"online\"}],\"ops\":{\"model\":\"namespace\"},\"runtime\":{\"type\":\"native_proc\"},\"permissions\":{\"default\":\"deny-by-default\"},\"schema\":{\"model\":\"namespace-mount\"},\"invoke_template\":{\"op\":\"capture\"},\"help_md\":\"Camera driver\"}]",
         .{},
     );
     defer parsed.deinit();
@@ -338,6 +364,7 @@ test "venom_catalog: accepts optional namespace metadata fields" {
     try std.testing.expectEqual(@as(usize, 1), services.items.len);
     try std.testing.expect(std.mem.indexOf(u8, services.items[0].mounts_json, "\"mount_id\":\"camera-main\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, services.items[0].runtime_json, "\"type\":\"native_proc\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, services.items[0].invoke_template_json.?, "\"capture\"") != null);
     try std.testing.expectEqualStrings("Camera driver", services.items[0].help_md.?);
 }
 

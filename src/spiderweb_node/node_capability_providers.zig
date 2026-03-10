@@ -1,5 +1,6 @@
 const std = @import("std");
 const fs_node_ops = @import("fs_node_ops.zig");
+const venom_contracts = @import("venom_contracts.zig");
 
 pub const NodeLabelArg = struct {
     key: []const u8,
@@ -293,8 +294,16 @@ fn appendTerminalVenom(
     defer allocator.free(endpoint);
 
     try out.writer(allocator).print(
-        "{{\"venom_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\",\"invoke\":true}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true,\"invoke\":\"control/invoke.json\",\"paths\":{{\"exec\":\"control/invoke.json\"}}}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"venom-driver-v1\",\"entry\":\"internal-terminal-invoke\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{{\"model\":\"namespace-service-v1\"}},\"help_md\":\"Terminal namespace driver\"}}",
-        .{ venom_id, endpoint, escaped_terminal_id, venom_id, endpoint },
+        "{{\"venom_id\":\"{s}\",\"kind\":\"terminal\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"{s}\"],\"capabilities\":{{\"pty\":true,\"terminal_id\":\"{s}\",\"invoke\":true}},\"mounts\":[{{\"mount_id\":\"{s}\",\"mount_path\":\"{s}\",\"state\":\"online\"}}],\"ops\":{{\"model\":\"namespace\",\"style\":\"plan9\",\"interactive\":true,\"invoke\":\"control/invoke.json\",\"paths\":{{\"exec\":\"control/invoke.json\"}}}},\"runtime\":{{\"type\":\"native_proc\",\"abi\":\"venom-driver-v1\",\"entry\":\"internal-terminal-invoke\"}},\"permissions\":{{\"default\":\"deny-by-default\",\"allow_roles\":[\"admin\",\"user\"],\"device\":\"terminal\"}},\"schema\":{s},\"invoke_template\":{s},\"help_md\":\"Terminal namespace driver\"}}",
+        .{
+            venom_id,
+            endpoint,
+            escaped_terminal_id,
+            venom_id,
+            endpoint,
+            venom_contracts.terminal.descriptor_schema_json,
+            venom_contracts.terminal.invoke_template_json,
+        },
     );
 }
 
@@ -371,6 +380,8 @@ test "node_capability_providers: build service upsert payload includes fs and te
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"runtime\":{\"type\":\"builtin\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"permissions\":{\"default\":\"deny-by-default\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"ops\":{\"model\":\"namespace\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"schema\":{\"model\":\"terminal-driver-v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"invoke_template\":{\"tool_name\":\"terminal_exec\"") != null);
 }
 
 test "node_capability_providers: duplicate terminal id rejected" {

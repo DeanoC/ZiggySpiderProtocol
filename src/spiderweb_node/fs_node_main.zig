@@ -11,6 +11,7 @@ const plugin_loader_wasm = @import("plugin_loader_wasm.zig");
 const zwasm_runtime = @import("zwasm_runtime.zig");
 const venom_manifest = @import("venom_manifest.zig");
 const venom_runtime_manager = @import("venom_runtime_manager.zig");
+const venom_contracts = @import("venom_contracts.zig");
 const namespace_driver = @import("namespace_driver.zig");
 const unified = @import("spider-protocol").unified;
 
@@ -28,9 +29,8 @@ const fsrpc_node_proto_id: i64 = 2;
 const control_node_not_found_code = "node_not_found";
 const control_node_auth_failed_code = "node_auth_failed";
 const inproc_helper_max_io_bytes: usize = 1024 * 1024;
-const namespace_venom_schema_default_json =
-    "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
-const namespace_venom_invoke_template_default_json = "{}";
+const namespace_venom_schema_default_json = venom_contracts.namespace_service.descriptor_schema_json;
+const namespace_venom_invoke_template_default_json = venom_contracts.namespace_service.default_invoke_template_json;
 
 const PairMode = enum {
     invite,
@@ -1365,18 +1365,9 @@ fn buildTerminalNamespaceExports(
             .runtime_kind = .native_proc,
             .executable_path = try allocator.dupe(u8, self_executable_path),
             .timeout_ms = 30_000,
-            .help_md = try allocator.dupe(
-                u8,
-                "Terminal namespace driver.\nWrite JSON payloads to control/invoke.json with command or argv.",
-            ),
-            .schema_json = try allocator.dupe(
-                u8,
-                "{\"model\":\"terminal-driver-v1\",\"arguments\":{\"command\":\"string (optional)\",\"argv\":\"string[] (optional)\",\"cwd\":\"string (optional)\",\"max_output_bytes\":\"number (optional)\"}}",
-            ),
-            .invoke_template_json = try allocator.dupe(
-                u8,
-                "{\"tool_name\":\"terminal_exec\",\"arguments\":{\"command\":\"echo hello\"}}",
-            ),
+            .help_md = try allocator.dupe(u8, venom_contracts.terminal.help_md),
+            .schema_json = try allocator.dupe(u8, venom_contracts.terminal.descriptor_schema_json),
+            .invoke_template_json = try allocator.dupe(u8, venom_contracts.terminal.invoke_template_json),
         };
         errdefer spec.deinit(allocator);
         try spec.args.append(allocator, try allocator.dupe(u8, "--internal-terminal-invoke"));

@@ -1,4 +1,5 @@
 const std = @import("std");
+const venom_contracts = @import("venom_contracts.zig");
 
 pub const LoadedVenom = struct {
     venom_id: []u8,
@@ -70,7 +71,7 @@ pub fn loadVenomManifestFile(
         allocator,
         parsed.value.object,
         "schema",
-        "{\"model\":\"namespace-mount\"}",
+        defaultSchemaJsonForManifest(parsed.value.object),
     );
     defer allocator.free(schema_json);
     const invoke_template_json = try parseOptionalObjectJsonOrDefault(
@@ -161,6 +162,29 @@ fn parseEndpoints(
         errdefer allocator.free(fallback);
         try out.append(allocator, fallback);
     }
+}
+
+fn defaultSchemaJsonForManifest(obj: std.json.ObjectMap) []const u8 {
+    if (obj.get("invoke_template") != null) return venom_contracts.namespace_service.descriptor_schema_json;
+    if (obj.get("ops")) |ops_value| {
+        if (ops_value == .object) {
+            if (ops_value.object.get("invoke")) |invoke_value| {
+                if (invoke_value == .string and invoke_value.string.len > 0) {
+                    return venom_contracts.namespace_service.descriptor_schema_json;
+                }
+            }
+            if (ops_value.object.get("paths")) |paths_value| {
+                if (paths_value == .object) {
+                    if (paths_value.object.get("invoke")) |invoke_value| {
+                        if (invoke_value == .string and invoke_value.string.len > 0) {
+                            return venom_contracts.namespace_service.descriptor_schema_json;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return "{\"model\":\"namespace-mount\"}";
 }
 
 fn parseMountsJson(
@@ -427,6 +451,36 @@ test "venom_manifest: disabled manifest is ignored" {
 
     const loaded = try loadVenomManifestFile(allocator, abs, "node-77");
     try std.testing.expect(loaded == null);
+}
+
+test "venom_manifest: service-like manifest defaults to namespace service schema" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "tool.json",
+        .data =
+        \\{
+        \\  "venom_id": "tool-main",
+        \\  "kind": "tool",
+        \\  "endpoints": ["/nodes/{node_id}/tool/main"],
+        \\  "ops": {"model": "namespace", "invoke": "control/invoke.json"},
+        \\  "runtime": {"type": "native_proc", "abi": "namespace-driver-v1"}
+        \\}
+        ,
+    });
+
+    const abs = try tmp.dir.realpathAlloc(allocator, "tool.json");
+    defer allocator.free(abs);
+
+    const loaded = try loadVenomManifestFile(allocator, abs, "node-77");
+    try std.testing.expect(loaded != null);
+    var service = loaded.?;
+    defer service.deinit(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, service.venom_json, "\"schema\":{\"model\":\"namespace-service-v1\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, service.venom_json, "\"invoke_template\":{}") != null);
 }
 
 test "venom_manifest: accepts venom_id alias and emits venom ABI metadata" {

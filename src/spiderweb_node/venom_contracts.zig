@@ -9,6 +9,21 @@ fn escape(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     return unified.jsonEscape(allocator, value);
 }
 
+pub const namespace_service = struct {
+    pub const descriptor_schema_json =
+        "{\"model\":\"namespace-service-v1\",\"control\":{\"invoke\":\"control/invoke.json\",\"reset\":\"control/reset\",\"enable\":\"control/enable\",\"disable\":\"control/disable\",\"restart\":\"control/restart\"},\"result\":\"result.json\",\"status\":\"status.json\",\"last_error\":\"last_error.txt\",\"metrics\":\"metrics.json\",\"config\":\"config.json\",\"health\":\"health.json\",\"host\":\"HOST.json\"}";
+    pub const default_invoke_template_json = "{}";
+};
+
+pub const terminal = struct {
+    pub const help_md =
+        "Terminal namespace driver.\nWrite JSON payloads to control/invoke.json with command or argv.";
+    pub const descriptor_schema_json =
+        "{\"model\":\"terminal-driver-v1\",\"arguments\":{\"command\":\"string (optional)\",\"argv\":\"string[] (optional)\",\"cwd\":\"string (optional)\",\"max_output_bytes\":\"number (optional)\"}}";
+    pub const invoke_template_json =
+        "{\"tool_name\":\"terminal_exec\",\"arguments\":{\"command\":\"echo hello\"}}";
+};
+
 pub const ChatMeta = struct {
     agent_id: []const u8,
     actor_type: []const u8,
