@@ -11,6 +11,7 @@ pub const spider_venom_wasm_abi = @import("spider_venom_wasm_abi.zig");
 pub const venom_contracts = @import("venom_contracts.zig");
 pub const node_capability_providers = @import("node_capability_providers.zig");
 pub const venom_manifest = @import("venom_manifest.zig");
+pub const venom_package = @import("venom_package.zig");
 pub const namespace_driver = @import("namespace_driver.zig");
 pub const venom_runtime_manager = @import("venom_runtime_manager.zig");
 pub const plugin_loader_native = @import("plugin_loader_native.zig");
@@ -47,6 +48,7 @@ test {
     _ = venom_contracts;
     _ = node_capability_providers;
     _ = venom_manifest;
+    _ = venom_package;
     _ = namespace_driver;
     _ = venom_runtime_manager;
     _ = plugin_loader_native;
