@@ -23,6 +23,7 @@ const JobRecord = struct {
     state: JobState,
     correlation_id: ?[]u8 = null,
     request_text: ?[]u8 = null,
+    request_json: ?[]u8 = null,
     result_text: ?[]u8 = null,
     error_text: ?[]u8 = null,
     log_text: ?[]u8 = null,
@@ -33,6 +34,7 @@ const JobRecord = struct {
         allocator.free(self.agent_id);
         if (self.correlation_id) |value| allocator.free(value);
         if (self.request_text) |value| allocator.free(value);
+        if (self.request_json) |value| allocator.free(value);
         if (self.result_text) |value| allocator.free(value);
         if (self.error_text) |value| allocator.free(value);
         if (self.log_text) |value| allocator.free(value);
@@ -83,6 +85,7 @@ pub const JobView = struct {
     state: JobState,
     correlation_id: ?[]u8 = null,
     request_text: ?[]u8 = null,
+    request_json: ?[]u8 = null,
     result_text: ?[]u8 = null,
     error_text: ?[]u8 = null,
     log_text: ?[]u8 = null,
@@ -92,6 +95,7 @@ pub const JobView = struct {
         allocator.free(self.agent_id);
         if (self.correlation_id) |value| allocator.free(value);
         if (self.request_text) |value| allocator.free(value);
+        if (self.request_json) |value| allocator.free(value);
         if (self.result_text) |value| allocator.free(value);
         if (self.error_text) |value| allocator.free(value);
         if (self.log_text) |value| allocator.free(value);
@@ -210,6 +214,20 @@ pub const ChatJobIndex = struct {
         const next_request_text = try self.allocator.dupe(u8, request_text);
         if (record.request_text) |value| self.allocator.free(value);
         record.request_text = next_request_text;
+        record.updated_at_ms = now_ms;
+        record.expires_at_ms = now_ms + self.ttl_ms;
+        self.persistSnapshotBestEffortLocked();
+    }
+
+    pub fn setRequestEnvelopeJson(self: *ChatJobIndex, job_id: []const u8, request_json: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const record = self.jobs.getPtr(job_id) orelse return JobIndexError.JobNotFound;
+        const now_ms = std.time.milliTimestamp();
+        const next_request_json = try self.allocator.dupe(u8, request_json);
+        if (record.request_json) |value| self.allocator.free(value);
+        record.request_json = next_request_json;
         record.updated_at_ms = now_ms;
         record.expires_at_ms = now_ms + self.ttl_ms;
         self.persistSnapshotBestEffortLocked();
@@ -419,6 +437,7 @@ pub const ChatJobIndex = struct {
             .state = record.state,
             .correlation_id = if (record.correlation_id) |value| try allocator.dupe(u8, value) else null,
             .request_text = if (record.request_text) |value| try allocator.dupe(u8, value) else null,
+            .request_json = if (record.request_json) |value| try allocator.dupe(u8, value) else null,
             .result_text = if (record.result_text) |value| try allocator.dupe(u8, value) else null,
             .error_text = if (record.error_text) |value| try allocator.dupe(u8, value) else null,
             .log_text = if (record.log_text) |value| try allocator.dupe(u8, value) else null,
@@ -577,6 +596,12 @@ fn appendRecordJson(
         break :blk try std.fmt.allocPrint(allocator, "\"{s}\"", .{escaped});
     } else try allocator.dupe(u8, "null");
     defer allocator.free(request_json);
+    const request_payload_json = if (record.request_json) |value| blk: {
+        const escaped = try unified.jsonEscape(allocator, value);
+        defer allocator.free(escaped);
+        break :blk try std.fmt.allocPrint(allocator, "\"{s}\"", .{escaped});
+    } else try allocator.dupe(u8, "null");
+    defer allocator.free(request_payload_json);
     const result_json = if (record.result_text) |value| blk: {
         const escaped = try unified.jsonEscape(allocator, value);
         defer allocator.free(escaped);
@@ -599,7 +624,7 @@ fn appendRecordJson(
     defer allocator.free(thought_json);
 
     try out.writer(allocator).print(
-        "{{\"job_id\":\"{s}\",\"agent_id\":\"{s}\",\"created_at_ms\":{d},\"updated_at_ms\":{d},\"expires_at_ms\":{d},\"state\":\"{s}\",\"correlation_id\":{s},\"request_text\":{s},\"result_text\":{s},\"error_text\":{s},\"log_text\":{s},\"thought_frames\":{s}}}",
+        "{{\"job_id\":\"{s}\",\"agent_id\":\"{s}\",\"created_at_ms\":{d},\"updated_at_ms\":{d},\"expires_at_ms\":{d},\"state\":\"{s}\",\"correlation_id\":{s},\"request_text\":{s},\"request_json\":{s},\"result_text\":{s},\"error_text\":{s},\"log_text\":{s},\"thought_frames\":{s}}}",
         .{
             escaped_id,
             escaped_agent,
@@ -609,6 +634,7 @@ fn appendRecordJson(
             jobStateName(record.state),
             correlation_json,
             request_json,
+            request_payload_json,
             result_json,
             error_json,
             log_json,
@@ -632,6 +658,7 @@ fn parseRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !JobRecord
         .state = state,
         .correlation_id = try dupOptionalNullableString(allocator, obj, "correlation_id"),
         .request_text = try dupOptionalNullableString(allocator, obj, "request_text"),
+        .request_json = try dupOptionalNullableString(allocator, obj, "request_json"),
         .result_text = try dupOptionalNullableString(allocator, obj, "result_text"),
         .error_text = try dupOptionalNullableString(allocator, obj, "error_text"),
         .log_text = try dupOptionalNullableString(allocator, obj, "log_text"),
@@ -846,6 +873,7 @@ test "chat_job_index: request and artifact updates persist in memory" {
     const job_id = try index.createJob("agent-a", "corr-request");
     defer allocator.free(job_id);
     try index.setRequestText(job_id, "hello from chat");
+    try index.setRequestEnvelopeJson(job_id, "{\"job_id\":\"job-1\",\"input\":\"hello from chat\"}");
     try index.updateArtifacts(job_id, "partial result", null, "worker log");
 
     const job = try index.getJob(allocator, job_id);
@@ -853,6 +881,7 @@ test "chat_job_index: request and artifact updates persist in memory" {
     var view = job.?;
     defer view.deinit(allocator);
     try std.testing.expectEqualStrings("hello from chat", view.request_text.?);
+    try std.testing.expectEqualStrings("{\"job_id\":\"job-1\",\"input\":\"hello from chat\"}", view.request_json.?);
     try std.testing.expectEqualStrings("partial result", view.result_text.?);
     try std.testing.expectEqualStrings("worker log", view.log_text.?);
 }
