@@ -6,9 +6,16 @@ pub const Error = error{
 
 pub const VenomDescriptor = struct {
     venom_id: []u8,
+    package_id: ?[]u8 = null,
+    instance_id: ?[]u8 = null,
     kind: []u8,
     version: []u8,
     state: []u8,
+    provider_scope: ?[]u8 = null,
+    categories_json: []u8,
+    hosts_json: []u8,
+    projection_modes_json: []u8,
+    requirements_json: []u8,
     capabilities_json: []u8,
     mounts_json: []u8,
     ops_json: []u8,
@@ -21,9 +28,16 @@ pub const VenomDescriptor = struct {
 
     pub fn deinit(self: *VenomDescriptor, allocator: std.mem.Allocator) void {
         allocator.free(self.venom_id);
+        if (self.package_id) |value| allocator.free(value);
+        if (self.instance_id) |value| allocator.free(value);
         allocator.free(self.kind);
         allocator.free(self.version);
         allocator.free(self.state);
+        if (self.provider_scope) |value| allocator.free(value);
+        allocator.free(self.categories_json);
+        allocator.free(self.hosts_json);
+        allocator.free(self.projection_modes_json);
+        allocator.free(self.requirements_json);
         allocator.free(self.capabilities_json);
         allocator.free(self.mounts_json);
         allocator.free(self.ops_json);
@@ -41,9 +55,31 @@ pub const VenomDescriptor = struct {
 pub fn venomDigest64(service: VenomDescriptor) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hashField(&hasher, service.venom_id);
+    if (service.package_id) |package_id| {
+        hasher.update(&.{1});
+        hashField(&hasher, package_id);
+    } else {
+        hasher.update(&.{0});
+    }
+    if (service.instance_id) |instance_id| {
+        hasher.update(&.{1});
+        hashField(&hasher, instance_id);
+    } else {
+        hasher.update(&.{0});
+    }
     hashField(&hasher, service.kind);
     hashField(&hasher, service.version);
     hashField(&hasher, service.state);
+    if (service.provider_scope) |provider_scope| {
+        hasher.update(&.{1});
+        hashField(&hasher, provider_scope);
+    } else {
+        hasher.update(&.{0});
+    }
+    hashField(&hasher, service.categories_json);
+    hashField(&hasher, service.hosts_json);
+    hashField(&hasher, service.projection_modes_json);
+    hashField(&hasher, service.requirements_json);
     hashField(&hasher, service.capabilities_json);
     hashField(&hasher, service.mounts_json);
     hashField(&hasher, service.ops_json);
@@ -120,9 +156,37 @@ pub fn replaceVenomsFromJsonValue(
 
         var service = VenomDescriptor{
             .venom_id = try allocator.dupe(u8, venom_id),
+            .package_id = if (obj.get("package_id")) |package_id_value| blk: {
+                if (package_id_value != .string or package_id_value.string.len == 0) return Error.InvalidPayload;
+                break :blk try allocator.dupe(u8, package_id_value.string);
+            } else null,
+            .instance_id = if (obj.get("instance_id")) |instance_id_value| blk: {
+                if (instance_id_value != .string or instance_id_value.string.len == 0) return Error.InvalidPayload;
+                break :blk try allocator.dupe(u8, instance_id_value.string);
+            } else null,
             .kind = try allocator.dupe(u8, kind),
             .version = try allocator.dupe(u8, version),
             .state = try allocator.dupe(u8, state),
+            .provider_scope = if (obj.get("provider_scope")) |provider_scope_value| blk: {
+                if (provider_scope_value != .string or provider_scope_value.string.len == 0) return Error.InvalidPayload;
+                break :blk try allocator.dupe(u8, provider_scope_value.string);
+            } else null,
+            .categories_json = if (obj.get("categories")) |categories_value|
+                try encodeArrayValue(allocator, categories_value)
+            else
+                try allocator.dupe(u8, "[]"),
+            .hosts_json = if (obj.get("hosts")) |hosts_value|
+                try encodeArrayValue(allocator, hosts_value)
+            else
+                try allocator.dupe(u8, "[]"),
+            .projection_modes_json = if (obj.get("projection_modes")) |projection_modes_value|
+                try encodeArrayValue(allocator, projection_modes_value)
+            else
+                try allocator.dupe(u8, "[]"),
+            .requirements_json = if (obj.get("requirements")) |requirements_value|
+                try encodeObjectValue(allocator, requirements_value)
+            else
+                try allocator.dupe(u8, "{}"),
             .capabilities_json = if (obj.get("capabilities")) |caps_value|
                 try encodeCapabilitiesValue(allocator, caps_value)
             else
@@ -189,8 +253,36 @@ pub fn appendVenomJson(
     defer allocator.free(escaped_state);
 
     try out.writer(allocator).print(
-        "{{\"venom_id\":\"{s}\",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\",\"endpoints\":[",
-        .{ escaped_id, escaped_kind, escaped_version, escaped_state },
+        "{{\"venom_id\":\"{s}\"",
+        .{escaped_id},
+    );
+    if (service.package_id) |package_id| {
+        const escaped_package_id = try jsonEscape(allocator, package_id);
+        defer allocator.free(escaped_package_id);
+        try out.writer(allocator).print(",\"package_id\":\"{s}\"", .{escaped_package_id});
+    }
+    if (service.instance_id) |instance_id| {
+        const escaped_instance_id = try jsonEscape(allocator, instance_id);
+        defer allocator.free(escaped_instance_id);
+        try out.writer(allocator).print(",\"instance_id\":\"{s}\"", .{escaped_instance_id});
+    }
+    try out.writer(allocator).print(
+        ",\"kind\":\"{s}\",\"version\":\"{s}\",\"state\":\"{s}\"",
+        .{ escaped_kind, escaped_version, escaped_state },
+    );
+    if (service.provider_scope) |provider_scope| {
+        const escaped_provider_scope = try jsonEscape(allocator, provider_scope);
+        defer allocator.free(escaped_provider_scope);
+        try out.writer(allocator).print(",\"provider_scope\":\"{s}\"", .{escaped_provider_scope});
+    }
+    try out.writer(allocator).print(
+        ",\"categories\":{s},\"hosts\":{s},\"projection_modes\":{s},\"requirements\":{s},\"endpoints\":[",
+        .{
+            service.categories_json,
+            service.hosts_json,
+            service.projection_modes_json,
+            service.requirements_json,
+        },
     );
     for (service.endpoints.items, 0..) |endpoint, idx| {
         if (idx != 0) try out.append(allocator, ',');
@@ -249,6 +341,11 @@ fn getOptionalString(obj: std.json.ObjectMap, name: []const u8) ?[]const u8 {
 
 fn encodeCapabilitiesValue(allocator: std.mem.Allocator, raw: std.json.Value) ![]u8 {
     if (raw != .object) return Error.InvalidPayload;
+    return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(raw, .{})});
+}
+
+fn encodeArrayValue(allocator: std.mem.Allocator, raw: std.json.Value) ![]u8 {
+    if (raw != .array) return Error.InvalidPayload;
     return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(raw, .{})});
 }
 
@@ -327,7 +424,7 @@ test "venom_catalog: parses and re-renders venoms array" {
     var parsed = try std.json.parseFromSlice(
         std.json.Value,
         allocator,
-        "[{\"venom_id\":\"fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/fs\"],\"capabilities\":{\"rw\":true}}]",
+        "[{\"venom_id\":\"fs\",\"package_id\":\"fs\",\"instance_id\":\"local:fs\",\"kind\":\"fs\",\"version\":\"1\",\"state\":\"online\",\"provider_scope\":\"host_local\",\"categories\":[\"filesystem\"],\"hosts\":[\"node\"],\"projection_modes\":[\"node_export\"],\"requirements\":{},\"endpoints\":[\"/nodes/node-1/fs\"],\"capabilities\":{\"rw\":true}}]",
         .{},
     );
     defer parsed.deinit();
@@ -341,6 +438,7 @@ test "venom_catalog: parses and re-renders venoms array" {
     defer out.deinit(allocator);
     try appendVenomJson(allocator, &out, services.items[0]);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"venom_id\":\"fs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"package_id\":\"fs\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"capabilities\":{\"rw\":true}") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"mounts\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\"runtime\":{}") != null);
@@ -353,7 +451,7 @@ test "venom_catalog: accepts optional namespace metadata fields" {
     var parsed = try std.json.parseFromSlice(
         std.json.Value,
         allocator,
-        "[{\"venom_id\":\"camera-main\",\"kind\":\"camera\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"/nodes/node-1/camera\"],\"capabilities\":{\"still\":true},\"mounts\":[{\"mount_id\":\"camera-main\",\"mount_path\":\"/nodes/node-1/camera\",\"state\":\"online\"}],\"ops\":{\"model\":\"namespace\"},\"runtime\":{\"type\":\"native_proc\"},\"permissions\":{\"default\":\"deny-by-default\"},\"schema\":{\"model\":\"namespace-mount\"},\"invoke_template\":{\"op\":\"capture\"},\"help_md\":\"Camera driver\"}]",
+        "[{\"venom_id\":\"camera-main\",\"package_id\":\"camera-main\",\"instance_id\":\"node-1:camera-main\",\"kind\":\"camera\",\"version\":\"1\",\"state\":\"online\",\"provider_scope\":\"node_export\",\"categories\":[\"camera\",\"edge\"],\"hosts\":[\"node\"],\"projection_modes\":[\"node_export\"],\"requirements\":{\"host_capabilities\":[\"namespace_driver\"]},\"endpoints\":[\"/nodes/node-1/camera\"],\"capabilities\":{\"still\":true},\"mounts\":[{\"mount_id\":\"camera-main\",\"mount_path\":\"/nodes/node-1/camera\",\"state\":\"online\"}],\"ops\":{\"model\":\"namespace\"},\"runtime\":{\"type\":\"native_proc\"},\"permissions\":{\"default\":\"deny-by-default\"},\"schema\":{\"model\":\"namespace-mount\"},\"invoke_template\":{\"op\":\"capture\"},\"help_md\":\"Camera driver\"}]",
         .{},
     );
     defer parsed.deinit();
@@ -362,6 +460,9 @@ test "venom_catalog: accepts optional namespace metadata fields" {
     defer deinitVenoms(allocator, &services);
     try replaceVenomsFromJsonValue(allocator, &services, parsed.value);
     try std.testing.expectEqual(@as(usize, 1), services.items.len);
+    try std.testing.expectEqualStrings("camera-main", services.items[0].package_id.?);
+    try std.testing.expectEqualStrings("node_export", services.items[0].provider_scope.?);
+    try std.testing.expect(std.mem.indexOf(u8, services.items[0].projection_modes_json, "\"node_export\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, services.items[0].mounts_json, "\"mount_id\":\"camera-main\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, services.items[0].runtime_json, "\"type\":\"native_proc\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, services.items[0].invoke_template_json.?, "\"capture\"") != null);
@@ -374,7 +475,7 @@ test "venom_catalog: requires venom_id and re-renders it" {
     var parsed = try std.json.parseFromSlice(
         std.json.Value,
         allocator,
-        "[{\"venom_id\":\"memory\",\"kind\":\"memory\",\"version\":\"1\",\"state\":\"online\",\"endpoints\":[\"/global/memory\"]}]",
+        "[{\"venom_id\":\"memory\",\"kind\":\"memory\",\"version\":\"1\",\"state\":\"online\",\"categories\":[],\"hosts\":[],\"projection_modes\":[],\"requirements\":{},\"endpoints\":[\"/global/memory\"]}]",
         .{},
     );
     defer parsed.deinit();
