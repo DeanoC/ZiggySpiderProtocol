@@ -11,6 +11,7 @@ pub const JobState = shared_job.JobState;
 
 pub const JobIndexError = error{
     JobNotFound,
+    JobAlreadyTerminal,
 };
 
 const JobRecord = struct {
@@ -225,6 +226,7 @@ pub const ChatJobIndex = struct {
         defer self.mutex.unlock();
 
         const record = self.jobs.getPtr(job_id) orelse return JobIndexError.JobNotFound;
+        if (isTerminalState(record.state)) return JobIndexError.JobAlreadyTerminal;
         const now_ms = std.time.milliTimestamp();
         if (result_text) |value| {
             const next_result_text = try self.allocator.dupe(u8, value);
@@ -853,6 +855,30 @@ test "chat_job_index: request and artifact updates persist in memory" {
     try std.testing.expectEqualStrings("hello from chat", view.request_text.?);
     try std.testing.expectEqualStrings("partial result", view.result_text.?);
     try std.testing.expectEqualStrings("worker log", view.log_text.?);
+}
+
+test "chat_job_index: artifact updates are rejected after terminal state" {
+    const allocator = std.testing.allocator;
+    var index = ChatJobIndex.init(allocator, "");
+    defer index.deinit();
+
+    const job_id = try index.createJob("agent-a", "corr-terminal");
+    defer allocator.free(job_id);
+    try index.markCompleted(job_id, true, "final result", null, "final log");
+
+    try std.testing.expectError(
+        JobIndexError.JobAlreadyTerminal,
+        index.updateArtifacts(job_id, "late result", "late error", "late log"),
+    );
+
+    const job = try index.getJob(allocator, job_id);
+    try std.testing.expect(job != null);
+    var view = job.?;
+    defer view.deinit(allocator);
+    try std.testing.expectEqual(JobState.done, view.state);
+    try std.testing.expectEqualStrings("final result", view.result_text.?);
+    try std.testing.expectEqualStrings("final log", view.log_text.?);
+    try std.testing.expect(view.error_text == null);
 }
 
 test "chat_job_index: hasInFlightForAgent tracks queued/running jobs" {
