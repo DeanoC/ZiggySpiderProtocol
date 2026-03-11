@@ -196,7 +196,7 @@ func ValidateEnvelope(payload map[string]any) error {
 				Details: payload,
 			}
 		}
-		if rawID, ok := payload["id"]; ok && rawID != nil {
+		if rawID, ok := payload["id"]; ok {
 			if _, ok := rawID.(string); !ok {
 				return &SpiderProtocolError{
 					Code:    "invalid_id",
@@ -228,7 +228,7 @@ func ValidateEnvelope(payload map[string]any) error {
 				Details: payload,
 			}
 		}
-		if rawTag, ok := payload["tag"]; ok && rawTag != nil {
+		if rawTag, ok := payload["tag"]; ok {
 			if _, ok := integerValue(rawTag); !ok {
 				return &SpiderProtocolError{
 					Code:    "invalid_tag",

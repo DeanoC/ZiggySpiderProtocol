@@ -109,7 +109,7 @@ def parse_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
                 f"unsupported control type {msg_type}",
                 payload,
             )
-        if "id" in payload and payload["id"] is not None and not isinstance(payload["id"], str):
+        if "id" in payload and not isinstance(payload["id"], str):
             raise SpiderProtocolError("invalid_id", "control id must be a string", payload)
         return payload
 
@@ -132,11 +132,7 @@ def parse_envelope(raw: str | dict[str, Any]) -> dict[str, Any]:
                 f"unsupported acheron type {msg_type}",
                 payload,
             )
-        if (
-            "tag" in payload
-            and payload["tag"] is not None
-            and (not isinstance(payload["tag"], int) or isinstance(payload["tag"], bool))
-        ):
+        if "tag" in payload and (not isinstance(payload["tag"], int) or isinstance(payload["tag"], bool)):
             raise SpiderProtocolError("invalid_tag", "acheron tag must be an integer", payload)
         return payload
 
