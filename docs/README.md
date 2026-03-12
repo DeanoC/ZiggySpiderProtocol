@@ -15,3 +15,10 @@ generated protocol references, and node runtime module contracts.
 Generated protocol artifacts live under `../sdk/spec/` and are refreshed with:
 
 - `zig build sync-sdk`
+
+Language SDKs live under:
+
+- `../sdk/typescript/spiderweb-protocol`
+- `../sdk/python/spiderweb_protocol`
+- `../sdk/go/spiderwebprotocol`
+- `../sdk/rust/spiderweb-protocol`

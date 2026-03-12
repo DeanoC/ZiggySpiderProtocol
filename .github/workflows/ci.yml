@@ -13,3 +13,12 @@ jobs:
       verify_script: |
         grep -q '\.name = \.ziggy_spider_protocol' build.zig.zon
         grep -q '\.version = ' build.zig.zon
+  rust-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Rust SDK tests
+        run: cargo test --manifest-path sdk/rust/spiderweb-protocol/Cargo.toml --all-features

@@ -2,6 +2,11 @@ const std = @import("std");
 const unified = @import("unified.zig");
 const unified_build = @import("unified_build.zig");
 const spider_venom_wasm_constants = @import("spiderweb_node/spider_venom_wasm_constants.zig");
+const sdk_schema = @import("sdk_schema.zig");
+
+comptime {
+    @setEvalBranchQuota(20_000);
+}
 
 pub const control_protocol_name = "unified-v2";
 pub const acheron_runtime_version = "acheron-1";
@@ -87,6 +92,7 @@ const ArtifactKind = enum {
     ts_generated,
     py_generated,
     go_generated,
+    rust_generated,
 };
 
 const Artifact = struct {
@@ -132,6 +138,7 @@ const artifacts = [_]Artifact{
     .{ .kind = .ts_generated, .rel_path = &.{ "sdk", "typescript", "spiderweb-protocol", "src", "generated.ts" } },
     .{ .kind = .py_generated, .rel_path = &.{ "sdk", "python", "spiderweb_protocol", "spiderweb_protocol", "generated.py" } },
     .{ .kind = .go_generated, .rel_path = &.{ "sdk", "go", "spiderwebprotocol", "generated.go" } },
+    .{ .kind = .rust_generated, .rel_path = &.{ "sdk", "rust", "spiderweb-protocol", "src", "generated.rs" } },
 };
 
 pub fn syncWorkspace(allocator: std.mem.Allocator) !void {
@@ -181,6 +188,7 @@ pub fn renderArtifact(allocator: std.mem.Allocator, kind: ArtifactKind) ![]u8 {
         .ts_generated => renderTypescriptGenerated(allocator),
         .py_generated => renderPythonGenerated(allocator),
         .go_generated => renderGoGenerated(allocator),
+        .rust_generated => renderRustGenerated(allocator),
     };
 }
 
@@ -228,6 +236,7 @@ fn renderProtocolJson(allocator: std.mem.Allocator) ![]u8 {
     try writer.writeAll("\n    ],\n    \"acheron\": [\n");
     try writeAcheronMessageSpec(writer);
     try writer.writeAll("\n    ]\n  },\n");
+    try writeSchemaRegistry(writer);
     try writer.writeAll("  \"errors\": {\n");
     try writer.writeAll("    \"control\": {\"type\": \"control.error\", \"fields\": [\"channel\", \"type\", \"id?\", \"ok=false\", \"error.code\", \"error.message\"]},\n");
     try writer.writeAll("    \"acheron\": {\"type\": \"acheron.error\", \"fields\": [\"channel\", \"type\", \"tag?\", \"ok=false\", \"error.code\", \"error.message\"]},\n");
@@ -633,6 +642,123 @@ fn renderGoGenerated(allocator: std.mem.Allocator) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
+fn renderRustGenerated(allocator: std.mem.Allocator) ![]u8 {
+    var out = std.ArrayListUnmanaged(u8){};
+    errdefer out.deinit(allocator);
+    const writer = out.writer(allocator);
+
+    try writer.writeAll("// Generated from src/sdk_artifacts.zig. Do not edit by hand.\n");
+    try writer.writeAll("use serde::{Deserialize, Serialize};\n\n");
+    try writer.writeAll("pub type AnyJson = serde_json::Value;\n\n");
+    try writer.writeAll("pub const CONTROL_PROTOCOL: &str = ");
+    try writeRustString(writer, control_protocol_name);
+    try writer.writeAll(";\n");
+    try writer.writeAll("pub const ACHERON_RUNTIME_VERSION: &str = ");
+    try writeRustString(writer, acheron_runtime_version);
+    try writer.writeAll(";\n");
+    try writer.writeAll("pub const NODE_FS_PROTOCOL: &str = ");
+    try writeRustString(writer, node_fs_protocol_name);
+    try writer.writeAll(";\n");
+    try writer.print("pub const NODE_FS_PROTO: u32 = {d};\n\n", .{node_fs_protocol_proto});
+
+    try writer.writeAll("#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub enum Channel {\n");
+    try writer.writeAll("    #[serde(rename = \"control\")]\n    Control,\n");
+    try writer.writeAll("    #[serde(rename = \"acheron\")]\n    Acheron,\n");
+    try writer.writeAll("}\n\n");
+
+    try writeRustMessageTypeEnum(writer, .control);
+    try writeRustMessageTypeEnum(writer, .acheron);
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct ControlEnvelope<T> {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: ControlMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub id: Option<String>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub payload: Option<T>,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct ControlErrorEnvelope {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: ControlMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub id: Option<String>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    pub error: ControlError,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronPayloadEnvelope<T> {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub tag: Option<u32>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub payload: Option<T>,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronVersionEnvelope {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub tag: Option<u32>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    pub msize: u32,\n");
+    try writer.writeAll("    pub version: String,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronAttachEnvelope {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub tag: Option<u32>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    pub fid: u32,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronNodeEnvelope<T> {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub tag: Option<u32>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    pub node: u64,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub payload: Option<T>,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronHandleEnvelope<T> {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub tag: Option<u32>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    #[serde(rename = \"h\")]\n    pub handle: u64,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub payload: Option<T>,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronErrorEnvelope<T> {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub tag: Option<u32>,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub ok: Option<bool>,\n");
+    try writer.writeAll("    pub error: T,\n");
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub struct AcheronEventEnvelope<T> {\n");
+    try writer.writeAll("    pub channel: Channel,\n");
+    try writer.writeAll("    #[serde(rename = \"type\")]\n    pub message_type: AcheronMessageType,\n");
+    try writer.writeAll("    #[serde(skip_serializing_if = \"Option::is_none\")]\n    pub payload: Option<T>,\n");
+    try writer.writeAll("}\n\n");
+
+    try writeRustSchemaTypes(writer);
+    try writeRustControlEnums(writer);
+    try writeRustAcheronEnums(writer);
+
+    return out.toOwnedSlice(allocator);
+}
+
 fn renderFixtureControlVersionRequest(allocator: std.mem.Allocator) ![]u8 {
     return allocator.dupe(u8, "{\"channel\":\"control\",\"type\":\"control.version\",\"id\":\"version-1\",\"payload\":{\"protocol\":\"unified-v2\"}}\n");
 }
@@ -767,6 +893,522 @@ const GeneratedMessageArrayKind = enum {
     acheron_node_fs_only,
 };
 
+fn writeMessageSchemaSpec(writer: anytype, spec: sdk_schema.MessageSchemaSpec, indent: usize) !void {
+    try writeIndent(writer, indent);
+    try writer.writeAll("{\"name\": ");
+    try writeJsonString(writer, spec.wire_name);
+    try writer.writeAll(", \"category\": ");
+    try writeJsonString(writer, spec.category);
+    try writer.writeAll(", \"direction\": ");
+    try writeJsonString(writer, @tagName(spec.direction));
+    if (spec.correlation_field) |value| {
+        try writer.writeAll(", \"correlation_field\": ");
+        try writeJsonString(writer, value);
+    }
+    try writer.writeAll(", \"root_fields\": [");
+    if (spec.root_fields.len > 0) {
+        try writer.writeByte('\n');
+        for (spec.root_fields, 0..) |field, index| {
+            if (index != 0) try writer.writeAll(",\n");
+            try writeFieldSpec(writer, field, indent + 2);
+        }
+        try writer.writeByte('\n');
+        try writeIndent(writer, indent);
+    }
+    try writer.writeAll("]");
+    if (spec.payload_schema) |value| {
+        try writer.writeAll(", \"payload_schema\": ");
+        try writeJsonString(writer, value);
+    }
+    if (spec.result_schema) |value| {
+        try writer.writeAll(", \"result_schema\": ");
+        try writeJsonString(writer, value);
+    }
+    if (spec.error_schema) |value| {
+        try writer.writeAll(", \"error_schema\": ");
+        try writeJsonString(writer, value);
+    }
+    if (spec.alias_of) |value| {
+        try writer.writeAll(", \"alias_of\": ");
+        try writeJsonString(writer, value);
+    }
+    try writer.writeAll("}");
+}
+
+const RustMessageKind = enum {
+    control,
+    acheron,
+};
+
+fn writeRustString(writer: anytype, value: []const u8) !void {
+    try writer.writeByte('"');
+    for (value) |byte| {
+        switch (byte) {
+            '\\' => try writer.writeAll("\\\\"),
+            '"' => try writer.writeAll("\\\""),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            else => try writer.writeByte(byte),
+        }
+    }
+    try writer.writeByte('"');
+}
+
+fn writeRustMessageTypeEnum(writer: anytype, comptime kind: RustMessageKind) !void {
+    const enum_name = switch (kind) {
+        .control => "ControlMessageType",
+        .acheron => "AcheronMessageType",
+    };
+    try writer.writeAll("#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\n");
+    try writer.writeAll("pub enum ");
+    try writer.writeAll(enum_name);
+    try writer.writeAll(" {\n");
+    switch (kind) {
+        .control => {
+            inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+                const value: unified.ControlType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                try writer.writeAll("    #[serde(rename = ");
+                try writeRustString(writer, unified.controlTypeName(value));
+                try writer.writeAll(")]\n    ");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll(",\n");
+            }
+        },
+        .acheron => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                try writer.writeAll("    #[serde(rename = ");
+                try writeRustString(writer, unified.acheronTypeName(value));
+                try writer.writeAll(")]\n    ");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll(",\n");
+            }
+        },
+    }
+    try writer.writeAll("}\n\n");
+}
+
+fn writeRustVariantName(writer: anytype, raw_name: []const u8) !void {
+    var upper = true;
+    for (raw_name) |byte| {
+        switch (byte) {
+            '_', '-', '.' => upper = true,
+            else => {
+                try writer.writeByte(if (upper) std.ascii.toUpper(byte) else byte);
+                upper = false;
+            },
+        }
+    }
+}
+
+fn rustTypeName(type_name: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    if (std.mem.eql(u8, type_name, "string")) return allocator.dupe(u8, "String");
+    if (std.mem.eql(u8, type_name, "boolean")) return allocator.dupe(u8, "bool");
+    if (std.mem.eql(u8, type_name, "u32")) return allocator.dupe(u8, "u32");
+    if (std.mem.eql(u8, type_name, "u64")) return allocator.dupe(u8, "u64");
+    if (std.mem.eql(u8, type_name, "i64")) return allocator.dupe(u8, "i64");
+    if (std.mem.eql(u8, type_name, "AnyJson")) return allocator.dupe(u8, "AnyJson");
+    return allocator.dupe(u8, type_name);
+}
+
+fn writeRustSchemaTypes(writer: anytype) !void {
+    const allocator = std.heap.page_allocator;
+    for (sdk_schema.all_schemas) |schema| {
+        if (schema.kind != .object) continue;
+        try writer.writeAll("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]\n");
+        try writer.writeAll("pub struct ");
+        try writer.writeAll(schema.name);
+        try writer.writeAll(" {\n");
+        for (schema.fields) |field| {
+            try writeRustField(writer, allocator, field);
+        }
+        try writer.writeAll("}\n\n");
+    }
+}
+
+fn writeRustField(writer: anytype, allocator: std.mem.Allocator, field: sdk_schema.FieldSpec) !void {
+    const base_type = try rustTypeName(field.type_name, allocator);
+    defer allocator.free(base_type);
+    const wrapped_type = try rustWrappedFieldType(allocator, base_type, field);
+    defer allocator.free(wrapped_type);
+
+    try writer.writeAll("    ");
+    if (field.aliases.len > 0 or field.optional) {
+        try writer.writeAll("#[serde(");
+        if (field.optional) {
+            try writer.writeAll("default, skip_serializing_if = \"Option::is_none\"");
+            if (field.aliases.len > 0) try writer.writeAll(", ");
+        }
+        for (field.aliases, 0..) |alias, index| {
+            if (index != 0) try writer.writeAll(", ");
+            try writer.writeAll("alias = ");
+            try writeRustString(writer, alias);
+        }
+        try writer.writeAll(")]\n    ");
+    }
+    try writer.writeAll("pub ");
+    try writer.writeAll(field.name);
+    try writer.writeAll(": ");
+    try writer.writeAll(wrapped_type);
+    try writer.writeAll(",\n");
+}
+
+fn rustWrappedFieldType(allocator: std.mem.Allocator, base_type: []const u8, field: sdk_schema.FieldSpec) ![]u8 {
+    var current = if (field.is_array)
+        try std.fmt.allocPrint(allocator, "Vec<{s}>", .{base_type})
+    else
+        try allocator.dupe(u8, base_type);
+    errdefer allocator.free(current);
+    if (field.optional or field.nullable) {
+        const wrapped = try std.fmt.allocPrint(allocator, "Option<{s}>", .{current});
+        allocator.free(current);
+        current = wrapped;
+    }
+    return current;
+}
+
+fn writeRustControlEnums(writer: anytype) !void {
+    comptime {
+        @setEvalBranchQuota(100_000);
+    }
+    try writer.writeAll("pub type ControlErrorEnvelopeEnum = ControlErrorEnvelope;\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq)]\n");
+    try writer.writeAll("pub enum ControlRequestEnvelope {\n");
+    inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+        const value: unified.ControlType = @enumFromInt(field.value);
+        if (value == .unknown or value == .err) continue;
+        const spec = comptime sdk_schema.controlMessageSchema(value);
+        if (spec.direction != .request) continue;
+        try writer.writeAll("    ");
+        try writeRustVariantName(writer, field.name);
+        try writer.writeAll("(ControlEnvelope<");
+        try writer.writeAll(spec.payload_schema orelse "EmptyObject");
+        try writer.writeAll(">),\n");
+    }
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq)]\n");
+    try writer.writeAll("pub enum ControlResponseEnvelope {\n");
+    inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+        const value: unified.ControlType = @enumFromInt(field.value);
+        if (value == .unknown or value == .err) continue;
+        const spec = comptime sdk_schema.controlMessageSchema(value);
+        if (spec.direction == .response) {
+            try writer.writeAll("    ");
+            try writeRustVariantName(writer, field.name);
+            try writer.writeAll("(ControlEnvelope<");
+            try writer.writeAll(spec.payload_schema orelse "EmptyObject");
+            try writer.writeAll(">),\n");
+        } else if (spec.result_schema) |result_schema| {
+            try writer.writeAll("    ");
+            try writeRustVariantName(writer, field.name);
+            try writer.writeAll("(ControlEnvelope<");
+            try writer.writeAll(result_schema);
+            try writer.writeAll(">),\n");
+        }
+    }
+    try writer.writeAll("}\n\n");
+
+    try writeRustEnumValueImpl(writer, "ControlRequestEnvelope", .control, true);
+    try writeRustEnumValueImpl(writer, "ControlResponseEnvelope", .control, false);
+}
+
+fn writeRustAcheronEnums(writer: anytype) !void {
+    comptime {
+        @setEvalBranchQuota(100_000);
+    }
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq)]\n");
+    try writer.writeAll("pub enum AcheronRequestEnvelope {\n");
+    inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+        const value: unified.FsrpcType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = comptime sdk_schema.acheronMessageSchema(value);
+        if (spec.direction != .request) continue;
+        try writeRustAcheronVariant(writer, spec, field.name);
+    }
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq)]\n");
+    try writer.writeAll("pub enum AcheronResponseEnvelope {\n");
+    inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+        const value: unified.FsrpcType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = comptime sdk_schema.acheronMessageSchema(value);
+        if (spec.direction != .response) continue;
+        try writeRustAcheronVariant(writer, spec, field.name);
+    }
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq)]\n");
+    try writer.writeAll("pub enum AcheronEventEnvelopeEnum {\n");
+    inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+        const value: unified.FsrpcType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = comptime sdk_schema.acheronMessageSchema(value);
+        if (spec.direction != .event) continue;
+        try writeRustAcheronVariant(writer, spec, field.name);
+    }
+    try writer.writeAll("}\n\n");
+
+    try writer.writeAll("#[derive(Debug, Clone, PartialEq)]\n");
+    try writer.writeAll("pub enum AcheronErrorEnvelopeEnum {\n");
+    try writer.writeAll("    Error(AcheronErrorEnvelope<AcheronError>),\n");
+    try writer.writeAll("    FsErr(AcheronErrorEnvelope<AcheronFsError>),\n");
+    try writer.writeAll("}\n\n");
+
+    try writeRustEnumValueImpl(writer, "AcheronRequestEnvelope", .acheron, true);
+    try writeRustEnumValueImpl(writer, "AcheronResponseEnvelope", .acheron, false);
+    try writeRustEnumValueImpl(writer, "AcheronEventEnvelopeEnum", .acheron, false);
+    try writeRustAcheronErrorEnumValueImpl(writer);
+}
+
+fn writeRustAcheronVariant(writer: anytype, spec: sdk_schema.MessageSchemaSpec, variant_name: []const u8) !void {
+    try writer.writeAll("    ");
+    try writeRustVariantName(writer, variant_name);
+    try writer.writeAll("(");
+    if (std.mem.eql(u8, spec.wire_name, "acheron.t_version") or std.mem.eql(u8, spec.wire_name, "acheron.r_version")) {
+        try writer.writeAll("AcheronVersionEnvelope");
+    } else if (std.mem.eql(u8, spec.wire_name, "acheron.t_attach")) {
+        try writer.writeAll("AcheronAttachEnvelope");
+    } else if (spec.direction == .event) {
+        try writer.writeAll("AcheronEventEnvelope<");
+        try writer.writeAll(spec.payload_schema orelse "EmptyObject");
+        try writer.writeAll(">");
+    } else if (hasRootField(spec.root_fields, "node")) {
+        try writer.writeAll("AcheronNodeEnvelope<");
+        try writer.writeAll(spec.payload_schema orelse "EmptyObject");
+        try writer.writeAll(">");
+    } else if (hasRootField(spec.root_fields, "h")) {
+        try writer.writeAll("AcheronHandleEnvelope<");
+        try writer.writeAll(spec.payload_schema orelse "EmptyObject");
+        try writer.writeAll(">");
+    } else {
+        try writer.writeAll("AcheronPayloadEnvelope<");
+        try writer.writeAll(spec.payload_schema orelse "EmptyObject");
+        try writer.writeAll(">");
+    }
+    try writer.writeAll("),\n");
+}
+
+fn hasRootField(fields: []const sdk_schema.FieldSpec, name: []const u8) bool {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return true;
+    }
+    return false;
+}
+
+fn writeRustEnumValueImpl(writer: anytype, comptime enum_name: []const u8, comptime kind: RustMessageKind, comptime request_only: bool) !void {
+    comptime {
+        @setEvalBranchQuota(100_000);
+    }
+    const message_enum_name = switch (kind) {
+        .control => "ControlMessageType",
+        .acheron => "AcheronMessageType",
+    };
+    try writer.writeAll("impl ");
+    try writer.writeAll(enum_name);
+    try writer.writeAll(" {\n");
+    try writer.writeAll("    pub fn to_value(&self) -> serde_json::Result<serde_json::Value> {\n");
+    try writer.writeAll("        match self {\n");
+    switch (kind) {
+        .control => {
+            inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+                const value: unified.ControlType = @enumFromInt(field.value);
+                if (value == .unknown or value == .err) continue;
+                const spec = comptime sdk_schema.controlMessageSchema(value);
+                if (request_only) {
+                    if (spec.direction != .request) continue;
+                } else {
+                    if (!(spec.direction == .response or spec.result_schema != null)) continue;
+                }
+                try writer.writeAll("            Self::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll("(inner) => serde_json::to_value(inner),\n");
+            }
+        },
+        .acheron => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                const spec = comptime sdk_schema.acheronMessageSchema(value);
+                if (request_only) {
+                    if (spec.direction != .request) continue;
+                } else if (comptime std.mem.eql(u8, enum_name, "AcheronEventEnvelopeEnum")) {
+                    if (spec.direction != .event) continue;
+                } else {
+                    if (spec.direction != .response) continue;
+                }
+                try writer.writeAll("            Self::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll("(inner) => serde_json::to_value(inner),\n");
+            }
+        },
+    }
+    try writer.writeAll("        }\n    }\n\n");
+
+    try writer.writeAll("    pub fn from_value(value: serde_json::Value) -> serde_json::Result<Self> {\n");
+    try writer.writeAll("        let message_type = value.get(\"type\").and_then(|v| v.as_str()).ok_or_else(|| serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, \"missing type\")))?;\n");
+    try writer.writeAll("        match message_type {\n");
+    switch (kind) {
+        .control => {
+            inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+                const value: unified.ControlType = @enumFromInt(field.value);
+                if (value == .unknown or value == .err) continue;
+                const spec = comptime sdk_schema.controlMessageSchema(value);
+                if (request_only) {
+                    if (spec.direction != .request) continue;
+                } else {
+                    if (!(spec.direction == .response or spec.result_schema != null)) continue;
+                }
+                try writer.writeAll("            ");
+                try writeRustString(writer, unified.controlTypeName(value));
+                try writer.writeAll(" => Ok(Self::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll("(serde_json::from_value(value)?)),\n");
+            }
+        },
+        .acheron => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                const spec = comptime sdk_schema.acheronMessageSchema(value);
+                if (request_only) {
+                    if (spec.direction != .request) continue;
+                } else if (comptime std.mem.eql(u8, enum_name, "AcheronEventEnvelopeEnum")) {
+                    if (spec.direction != .event) continue;
+                } else {
+                    if (spec.direction != .response) continue;
+                }
+                try writer.writeAll("            ");
+                try writeRustString(writer, unified.acheronTypeName(value));
+                try writer.writeAll(" => Ok(Self::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll("(serde_json::from_value(value)?)),\n");
+            }
+        },
+    }
+    try writer.writeAll("            _ => Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, \"unsupported type\"))),\n");
+    try writer.writeAll("        }\n    }\n\n");
+
+    try writer.writeAll("    pub fn message_type(&self) -> ");
+    try writer.writeAll(message_enum_name);
+    try writer.writeAll(" {\n");
+    try writer.writeAll("        match self {\n");
+    switch (kind) {
+        .control => {
+            inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+                const value: unified.ControlType = @enumFromInt(field.value);
+                if (value == .unknown or value == .err) continue;
+                const spec = comptime sdk_schema.controlMessageSchema(value);
+                if (request_only) {
+                    if (spec.direction != .request) continue;
+                } else {
+                    if (!(spec.direction == .response or spec.result_schema != null)) continue;
+                }
+                try writer.writeAll("            Self::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll("(_) => ");
+                try writer.writeAll(message_enum_name);
+                try writer.writeAll("::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll(",\n");
+            }
+        },
+        .acheron => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                const spec = comptime sdk_schema.acheronMessageSchema(value);
+                if (request_only) {
+                    if (spec.direction != .request) continue;
+                } else if (comptime std.mem.eql(u8, enum_name, "AcheronEventEnvelopeEnum")) {
+                    if (spec.direction != .event) continue;
+                } else {
+                    if (spec.direction != .response) continue;
+                }
+                try writer.writeAll("            Self::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll("(_) => ");
+                try writer.writeAll(message_enum_name);
+                try writer.writeAll("::");
+                try writeRustVariantName(writer, field.name);
+                try writer.writeAll(",\n");
+            }
+        },
+    }
+    try writer.writeAll("        }\n    }\n}\n\n");
+}
+
+fn writeRustAcheronErrorEnumValueImpl(writer: anytype) !void {
+    try writer.writeAll("impl AcheronErrorEnvelopeEnum {\n");
+    try writer.writeAll("    pub fn to_value(&self) -> serde_json::Result<serde_json::Value> {\n");
+    try writer.writeAll("        match self {\n");
+    try writer.writeAll("            Self::Error(inner) => serde_json::to_value(inner),\n");
+    try writer.writeAll("            Self::FsErr(inner) => serde_json::to_value(inner),\n");
+    try writer.writeAll("        }\n    }\n\n");
+    try writer.writeAll("    pub fn from_value(value: serde_json::Value) -> serde_json::Result<Self> {\n");
+    try writer.writeAll("        let message_type = value.get(\"type\").and_then(|v| v.as_str()).ok_or_else(|| serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, \"missing type\")))?;\n");
+    try writer.writeAll("        match message_type {\n");
+    try writer.writeAll("            \"acheron.error\" => Ok(Self::Error(serde_json::from_value(value)?)),\n");
+    try writer.writeAll("            \"acheron.err_fs\" => Ok(Self::FsErr(serde_json::from_value(value)?)),\n");
+    try writer.writeAll("            _ => Err(serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, \"unsupported type\"))),\n");
+    try writer.writeAll("        }\n    }\n}\n\n");
+}
+
+fn writeFieldSpec(writer: anytype, field: sdk_schema.FieldSpec, indent: usize) !void {
+    try writeIndent(writer, indent);
+    try writer.writeAll("{\"name\": ");
+    try writeJsonString(writer, field.name);
+    try writer.writeAll(", \"type\": ");
+    try writeJsonString(writer, field.type_name);
+    try writer.writeAll(", \"optional\": ");
+    try writer.writeAll(if (field.optional) "true" else "false");
+    try writer.writeAll(", \"nullable\": ");
+    try writer.writeAll(if (field.nullable) "true" else "false");
+    try writer.writeAll(", \"is_array\": ");
+    try writer.writeAll(if (field.is_array) "true" else "false");
+    try writer.writeAll(", \"aliases\": [");
+    for (field.aliases, 0..) |alias, index| {
+        if (index != 0) try writer.writeAll(", ");
+        try writeJsonString(writer, alias);
+    }
+    try writer.writeAll("]}");
+}
+
+fn writeSchemaRegistry(writer: anytype) !void {
+    try writer.writeAll("  \"schemas\": {\n");
+    for (sdk_schema.all_schemas, 0..) |schema, index| {
+        try writeIndent(writer, 4);
+        try writeJsonString(writer, schema.name);
+        try writer.writeAll(": {\"kind\": ");
+        try writeJsonString(writer, @tagName(schema.kind));
+        if (schema.kind == .object) {
+            try writer.writeAll(", \"fields\": [");
+            if (schema.fields.len > 0) {
+                try writer.writeByte('\n');
+                for (schema.fields, 0..) |field, field_index| {
+                    if (field_index != 0) try writer.writeAll(",\n");
+                    try writeFieldSpec(writer, field, 8);
+                }
+                try writer.writeByte('\n');
+                try writeIndent(writer, 6);
+            }
+            try writer.writeAll("]");
+        }
+        try writer.writeAll("}");
+        if (index + 1 < sdk_schema.all_schemas.len) {
+            try writer.writeAll(",\n");
+        } else {
+            try writer.writeByte('\n');
+        }
+    }
+    try writer.writeAll("  },\n");
+}
+
 fn writeControlMessageSpec(writer: anytype) !void {
     var first = true;
     inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
@@ -774,14 +1416,7 @@ fn writeControlMessageSpec(writer: anytype) !void {
         if (value == .unknown) continue;
         if (!first) try writer.writeAll(",\n");
         first = false;
-        const name = unified.controlTypeName(value);
-        try writer.writeAll("      {\"name\": ");
-        try writeJsonString(writer, name);
-        try writer.writeAll(", \"category\": ");
-        try writeJsonString(writer, controlCategory(name));
-        try writer.writeAll(", \"direction\": ");
-        try writeJsonString(writer, controlDirection(name));
-        try writer.writeAll("}");
+        try writeMessageSchemaSpec(writer, sdk_schema.controlMessageSchema(value), 6);
     }
 }
 
@@ -792,14 +1427,7 @@ fn writeAcheronMessageSpec(writer: anytype) !void {
         if (value == .unknown) continue;
         if (!first) try writer.writeAll(",\n");
         first = false;
-        const name = unified.acheronTypeName(value);
-        try writer.writeAll("      {\"name\": ");
-        try writeJsonString(writer, name);
-        try writer.writeAll(", \"category\": ");
-        try writeJsonString(writer, acheronCategory(name));
-        try writer.writeAll(", \"direction\": ");
-        try writeJsonString(writer, acheronDirection(name));
-        try writer.writeAll("}");
+        try writeMessageSchemaSpec(writer, sdk_schema.acheronMessageSchema(value), 6);
     }
 }
 
@@ -1130,6 +1758,51 @@ test "sdk_artifacts: generated artifact files are current" {
         const current = try readExpectedArtifact(allocator, artifact.rel_path);
         defer allocator.free(current);
         try std.testing.expectEqualStrings(expected, current);
+    }
+}
+
+test "sdk_artifacts: every public message has a canonical schema entry" {
+    inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+        const value: unified.ControlType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = sdk_schema.controlMessageSchema(value);
+        try std.testing.expectEqualStrings(unified.controlTypeName(value), spec.wire_name);
+    }
+
+    inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+        const value: unified.FsrpcType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = sdk_schema.acheronMessageSchema(value);
+        try std.testing.expectEqualStrings(unified.acheronTypeName(value), spec.wire_name);
+    }
+}
+
+test "sdk_artifacts: canonical message schemas reference known reusable schemas" {
+    inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+        const value: unified.ControlType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = sdk_schema.controlMessageSchema(value);
+        if (spec.payload_schema) |name| try std.testing.expect(sdk_schema.findSchema(name) != null);
+        if (spec.result_schema) |name| try std.testing.expect(sdk_schema.findSchema(name) != null);
+        if (spec.error_schema) |name| try std.testing.expect(sdk_schema.findSchema(name) != null);
+        for (spec.root_fields) |root_field| {
+            if (sdk_schema.findSchema(root_field.type_name) == null) {
+                try std.testing.expect(stringInSlice(root_field.type_name, &.{ "string", "boolean", "u32", "u64", "i64" }));
+            }
+        }
+    }
+
+    inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+        const value: unified.FsrpcType = @enumFromInt(field.value);
+        if (value == .unknown) continue;
+        const spec = sdk_schema.acheronMessageSchema(value);
+        if (spec.payload_schema) |name| try std.testing.expect(sdk_schema.findSchema(name) != null);
+        if (spec.error_schema) |name| try std.testing.expect(sdk_schema.findSchema(name) != null);
+        for (spec.root_fields) |root_field| {
+            if (sdk_schema.findSchema(root_field.type_name) == null) {
+                try std.testing.expect(stringInSlice(root_field.type_name, &.{ "string", "boolean", "u32", "u64", "i64" }));
+            }
+        }
     }
 }
 

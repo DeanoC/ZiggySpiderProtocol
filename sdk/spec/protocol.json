@@ -28,141 +28,734 @@
   },
   "messages": {
     "control": [
-      {"name": "control.version", "category": "handshake", "direction": "request"},
-      {"name": "control.version_ack", "category": "handshake", "direction": "response"},
-      {"name": "control.connect", "category": "handshake", "direction": "request"},
-      {"name": "control.connect_ack", "category": "handshake", "direction": "response"},
-      {"name": "control.session_attach", "category": "session", "direction": "request"},
-      {"name": "control.session_status", "category": "session", "direction": "request"},
-      {"name": "control.session_resume", "category": "session", "direction": "request"},
-      {"name": "control.session_list", "category": "session", "direction": "request"},
-      {"name": "control.session_close", "category": "session", "direction": "request"},
-      {"name": "control.session_restore", "category": "session", "direction": "request"},
-      {"name": "control.session_history", "category": "session", "direction": "request"},
-      {"name": "control.ping", "category": "operations", "direction": "request"},
-      {"name": "control.pong", "category": "operations", "direction": "response"},
-      {"name": "control.metrics", "category": "operations", "direction": "request"},
-      {"name": "control.auth_status", "category": "auth", "direction": "request"},
-      {"name": "control.auth_rotate", "category": "auth", "direction": "request"},
-      {"name": "control.node_invite_create", "category": "node", "direction": "request"},
-      {"name": "control.node_join_request", "category": "node", "direction": "request"},
-      {"name": "control.node_join_pending_list", "category": "node", "direction": "request"},
-      {"name": "control.node_join_approve", "category": "node", "direction": "request"},
-      {"name": "control.node_join_deny", "category": "node", "direction": "request"},
-      {"name": "control.node_join", "category": "node", "direction": "request"},
-      {"name": "control.node_ensure", "category": "node", "direction": "request"},
-      {"name": "control.node_lease_refresh", "category": "node", "direction": "request"},
-      {"name": "control.venom_bind", "category": "venom", "direction": "request"},
-      {"name": "control.venom_upsert", "category": "venom", "direction": "request"},
-      {"name": "control.venom_get", "category": "venom", "direction": "request"},
-      {"name": "control.agent_ensure", "category": "agent", "direction": "request"},
-      {"name": "control.agent_list", "category": "agent", "direction": "request"},
-      {"name": "control.agent_get", "category": "agent", "direction": "request"},
-      {"name": "control.node_list", "category": "node", "direction": "request"},
-      {"name": "control.node_get", "category": "node", "direction": "request"},
-      {"name": "control.node_delete", "category": "node", "direction": "request"},
-      {"name": "control.workspace_create", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_update", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_delete", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_list", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_get", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_template_list", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_template_get", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_mount_set", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_mount_remove", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_mount_list", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_bind_set", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_bind_remove", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_bind_list", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_token_rotate", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_token_revoke", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_activate", "category": "workspace", "direction": "request"},
-      {"name": "control.workspace_up", "category": "workspace", "direction": "request"},
-      {"name": "control.project_create", "category": "project", "direction": "request"},
-      {"name": "control.project_update", "category": "project", "direction": "request"},
-      {"name": "control.project_delete", "category": "project", "direction": "request"},
-      {"name": "control.project_list", "category": "project", "direction": "request"},
-      {"name": "control.project_get", "category": "project", "direction": "request"},
-      {"name": "control.project_mount_set", "category": "project", "direction": "request"},
-      {"name": "control.project_mount_remove", "category": "project", "direction": "request"},
-      {"name": "control.project_mount_list", "category": "project", "direction": "request"},
-      {"name": "control.project_token_rotate", "category": "project", "direction": "request"},
-      {"name": "control.project_token_revoke", "category": "project", "direction": "request"},
-      {"name": "control.project_activate", "category": "project", "direction": "request"},
-      {"name": "control.workspace_status", "category": "workspace", "direction": "request"},
-      {"name": "control.reconcile_status", "category": "workspace", "direction": "request"},
-      {"name": "control.project_up", "category": "project", "direction": "request"},
-      {"name": "control.audit_tail", "category": "audit", "direction": "request"},
-      {"name": "control.error", "category": "error", "direction": "error"}
+      {"name": "control.version", "category": "handshake", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ControlVersionRequestPayload"},
+      {"name": "control.version_ack", "category": "handshake", "direction": "response", "correlation_field": "id", "root_fields": [], "payload_schema": "ControlVersionAckPayload"},
+      {"name": "control.connect", "category": "handshake", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "EmptyObject"},
+      {"name": "control.connect_ack", "category": "handshake", "direction": "response", "correlation_field": "id", "root_fields": [], "payload_schema": "ControlConnectAckPayload"},
+      {"name": "control.session_attach", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "SessionAttachRequest", "result_schema": "SessionStatusResponse"},
+      {"name": "control.session_status", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "SessionStatusRequest", "result_schema": "SessionStatusResponse"},
+      {"name": "control.session_resume", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "SessionKeyRequest", "result_schema": "SessionStatusResponse"},
+      {"name": "control.session_list", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "SessionListResponse"},
+      {"name": "control.session_close", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "SessionKeyRequest", "result_schema": "SessionCloseResponse"},
+      {"name": "control.session_restore", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AgentIdRequest", "result_schema": "SessionRestoreResponse"},
+      {"name": "control.session_history", "category": "session", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "SessionHistoryRequest", "result_schema": "SessionHistoryResponse"},
+      {"name": "control.ping", "category": "operations", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.pong", "category": "operations", "direction": "response", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "control.metrics", "category": "operations", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "AnyJson"},
+      {"name": "control.auth_status", "category": "auth", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "AnyJson"},
+      {"name": "control.auth_rotate", "category": "auth", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "AnyJson"},
+      {"name": "control.node_invite_create", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.node_join_request", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.node_join_pending_list", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "AnyJson"},
+      {"name": "control.node_join_approve", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.node_join_deny", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.node_join", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.node_ensure", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "NodeEnsureRequest", "result_schema": "EnsuredNodeIdentity"},
+      {"name": "control.node_lease_refresh", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.venom_bind", "category": "venom", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "VenomBindRequest", "result_schema": "AnyJson"},
+      {"name": "control.venom_upsert", "category": "venom", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.venom_get", "category": "venom", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.agent_ensure", "category": "agent", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.agent_list", "category": "agent", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "AgentListResponse"},
+      {"name": "control.agent_get", "category": "agent", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AgentIdRequest", "result_schema": "AgentGetResponse"},
+      {"name": "control.node_list", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "NodeListResponse"},
+      {"name": "control.node_get", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "NodeIdRequest", "result_schema": "NodeGetResponse"},
+      {"name": "control.node_delete", "category": "node", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "NodeIdRequest", "result_schema": "AnyJson"},
+      {"name": "control.workspace_create", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceCreateRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_update", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceUpdateRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_delete", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceDeleteResponse"},
+      {"name": "control.workspace_list", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "WorkspaceListResponse"},
+      {"name": "control.workspace_get", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_template_list", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "WorkspaceTemplateListResponse"},
+      {"name": "control.workspace_template_get", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceTemplateGetRequest", "result_schema": "WorkspaceTemplateGetResponse"},
+      {"name": "control.workspace_mount_set", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceMountSetRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_mount_remove", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceMountRemoveRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_mount_list", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceMountListResponse"},
+      {"name": "control.workspace_bind_set", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceBindSetRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_bind_remove", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceBindRemoveRequest", "result_schema": "WorkspaceDetail"},
+      {"name": "control.workspace_bind_list", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceBindListResponse"},
+      {"name": "control.workspace_token_rotate", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceTokenMutation"},
+      {"name": "control.workspace_token_revoke", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceTokenMutation"},
+      {"name": "control.workspace_activate", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceRefRequest", "result_schema": "WorkspaceStatus"},
+      {"name": "control.workspace_up", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceUpRequest", "result_schema": "WorkspaceUpResponse"},
+      {"name": "control.project_create", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectCreateRequest", "result_schema": "ProjectDetail", "alias_of": "control.workspace_create"},
+      {"name": "control.project_update", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectUpdateRequest", "result_schema": "ProjectDetail", "alias_of": "control.workspace_update"},
+      {"name": "control.project_delete", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectRefRequest", "result_schema": "ProjectDeleteResponse", "alias_of": "control.workspace_delete"},
+      {"name": "control.project_list", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "result_schema": "ProjectListResponse", "alias_of": "control.workspace_list"},
+      {"name": "control.project_get", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectRefRequest", "result_schema": "ProjectDetail", "alias_of": "control.workspace_get"},
+      {"name": "control.project_mount_set", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectMountSetRequest", "result_schema": "ProjectDetail", "alias_of": "control.workspace_mount_set"},
+      {"name": "control.project_mount_remove", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectMountRemoveRequest", "result_schema": "ProjectDetail", "alias_of": "control.workspace_mount_remove"},
+      {"name": "control.project_mount_list", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectRefRequest", "result_schema": "ProjectMountListResponse", "alias_of": "control.workspace_mount_list"},
+      {"name": "control.project_token_rotate", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectRefRequest", "result_schema": "ProjectTokenMutation", "alias_of": "control.workspace_token_rotate"},
+      {"name": "control.project_token_revoke", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectRefRequest", "result_schema": "ProjectTokenMutation", "alias_of": "control.workspace_token_revoke"},
+      {"name": "control.project_activate", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectRefRequest", "result_schema": "ProjectActivation", "alias_of": "control.workspace_activate"},
+      {"name": "control.workspace_status", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "WorkspaceStatusRequest", "result_schema": "WorkspaceStatus"},
+      {"name": "control.reconcile_status", "category": "workspace", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ReconcileStatusRequest", "result_schema": "ReconcileStatusResponse"},
+      {"name": "control.project_up", "category": "project", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "ProjectUpRequest", "result_schema": "ProjectUpResponse", "alias_of": "control.workspace_up"},
+      {"name": "control.audit_tail", "category": "audit", "direction": "request", "correlation_field": "id", "root_fields": [], "payload_schema": "AnyJson", "result_schema": "AnyJson"},
+      {"name": "control.error", "category": "error", "direction": "error", "correlation_field": "id", "root_fields": [], "error_schema": "ControlError"}
     ],
     "acheron": [
-      {"name": "acheron.t_version", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_version", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_attach", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_attach", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_walk", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_walk", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_open", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_open", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_read", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_read", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_write", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_write", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_stat", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_stat", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_clunk", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_clunk", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_flush", "category": "runtime", "direction": "request"},
-      {"name": "acheron.r_flush", "category": "runtime", "direction": "response"},
-      {"name": "acheron.t_fs_hello", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_hello", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_exports", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_exports", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_lookup", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_lookup", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_getattr", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_getattr", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_readdirp", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_readdirp", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_symlink", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_symlink", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_setxattr", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_setxattr", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_getxattr", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_getxattr", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_listxattr", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_listxattr", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_removexattr", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_removexattr", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_open", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_open", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_read", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_read", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_close", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_close", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_lock", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_lock", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_create", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_create", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_write", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_write", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_truncate", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_truncate", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_unlink", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_unlink", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_mkdir", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_mkdir", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_rmdir", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_rmdir", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_rename", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_rename", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.t_fs_statfs", "category": "node_fs", "direction": "request"},
-      {"name": "acheron.r_fs_statfs", "category": "node_fs", "direction": "response"},
-      {"name": "acheron.e_fs_inval", "category": "node_fs", "direction": "event"},
-      {"name": "acheron.e_fs_inval_dir", "category": "node_fs", "direction": "event"},
-      {"name": "acheron.err_fs", "category": "node_fs", "direction": "error"},
-      {"name": "acheron.error", "category": "runtime", "direction": "error"}
+      {"name": "acheron.t_version", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "msize", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "version", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+      {"name": "acheron.r_version", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [
+        {"name": "msize", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "version", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+      {"name": "acheron.t_attach", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "fid", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+      {"name": "acheron.r_attach", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AcheronAttachResponse"},
+      {"name": "acheron.t_walk", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_walk", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_open", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_open", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_read", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_read", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_write", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_write", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_stat", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_stat", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_clunk", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_clunk", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_flush", "category": "runtime", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_flush", "category": "runtime", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_hello", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsHelloRequest"},
+      {"name": "acheron.r_fs_hello", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsHelloResponse"},
+      {"name": "acheron.t_fs_exports", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_exports", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_lookup", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "node", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "FsLookupRequest"},
+      {"name": "acheron.r_fs_lookup", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsLookupResponse"},
+      {"name": "acheron.t_fs_getattr", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "node", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "EmptyObject"},
+      {"name": "acheron.r_fs_getattr", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsGetattrResponse"},
+      {"name": "acheron.t_fs_readdirp", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "node", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "FsReaddirpRequest"},
+      {"name": "acheron.r_fs_readdirp", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsReaddirpResponse"},
+      {"name": "acheron.t_fs_symlink", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_symlink", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_setxattr", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_setxattr", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_getxattr", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_getxattr", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_listxattr", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_listxattr", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_removexattr", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_removexattr", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_open", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "node", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "FsOpenRequest"},
+      {"name": "acheron.r_fs_open", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsOpenResponse"},
+      {"name": "acheron.t_fs_read", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "h", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "FsReadRequest"},
+      {"name": "acheron.r_fs_read", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsReadResponse"},
+      {"name": "acheron.t_fs_close", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "h", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "EmptyObject"},
+      {"name": "acheron.r_fs_close", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "EmptyObject"},
+      {"name": "acheron.t_fs_lock", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_lock", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_create", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_create", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_write", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [
+        {"name": "h", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ], "payload_schema": "FsWriteRequest"},
+      {"name": "acheron.r_fs_write", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "FsWriteResponse"},
+      {"name": "acheron.t_fs_truncate", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_truncate", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_unlink", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_unlink", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_mkdir", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_mkdir", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_rmdir", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_rmdir", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_rename", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_rename", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.t_fs_statfs", "category": "node_fs", "direction": "request", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.r_fs_statfs", "category": "node_fs", "direction": "response", "correlation_field": "tag", "root_fields": [], "payload_schema": "AnyJson"},
+      {"name": "acheron.e_fs_inval", "category": "node_fs", "direction": "event", "root_fields": [], "payload_schema": "FsInvalidateEvent"},
+      {"name": "acheron.e_fs_inval_dir", "category": "node_fs", "direction": "event", "root_fields": [], "payload_schema": "FsInvalidateDirEvent"},
+      {"name": "acheron.err_fs", "category": "node_fs", "direction": "error", "correlation_field": "tag", "root_fields": [], "error_schema": "AcheronFsError"},
+      {"name": "acheron.error", "category": "runtime", "direction": "error", "correlation_field": "tag", "root_fields": [], "error_schema": "AcheronError"}
     ]
+  },
+  "schemas": {
+    "AnyJson": {"kind": "any"},
+    "EmptyObject": {"kind": "object", "fields": []},
+    "ControlError": {"kind": "object", "fields": [
+        {"name": "code", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "message", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "AcheronError": {"kind": "object", "fields": [
+        {"name": "code", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "message", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "AcheronFsError": {"kind": "object", "fields": [
+        {"name": "errno", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "message", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ControlVersionRequestPayload": {"kind": "object", "fields": [
+        {"name": "protocol", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ControlVersionAckPayload": {"kind": "object", "fields": [
+        {"name": "protocol", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "acheron_runtime", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "acheron_node", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "acheron_node_proto", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ConnectAckWorkspaceMount": {"kind": "object", "fields": [
+        {"name": "mount_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "fs_url", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "state", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "online", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ConnectAckWorkspace": {"kind": "object", "fields": [
+        {"name": "mounts", "type": "ConnectAckWorkspaceMount", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "ControlConnectAckPayload": {"kind": "object", "fields": [
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "session", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "protocol", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "role", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bootstrap_only", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bootstrap_message", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "requires_session_attach", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace", "type": "ConnectAckWorkspace", "optional": true, "nullable": true, "is_array": false, "aliases": []}
+      ]},
+    "NodeEnsureRequest": {"kind": "object", "fields": [
+        {"name": "node_name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "fs_url", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "lease_ttl_ms", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "EnsuredNodeIdentity": {"kind": "object", "fields": [
+        {"name": "node_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_secret", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "MountView": {"kind": "object", "fields": [
+        {"name": "mount_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_name", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "fs_url", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "export_name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "BindView": {"kind": "object", "fields": [
+        {"name": "bind_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "target_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceSummary": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "project_id"]},
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "is_delete_protected", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "token_locked", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bind_count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "created_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectSummary": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "workspace_id"]},
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "is_delete_protected", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "token_locked", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bind_count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "created_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceDetail": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "project_id"]},
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "is_delete_protected", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "token_locked", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "created_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": ["project_token"]},
+        {"name": "mounts", "type": "MountView", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "binds", "type": "BindView", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "ProjectDetail": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "workspace_id"]},
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "is_delete_protected", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "token_locked", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "created_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": ["workspace_token"]},
+        {"name": "mounts", "type": "MountView", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "binds", "type": "BindView", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "WorkspaceRefRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectRefRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "NodeIdRequest": {"kind": "object", "fields": [
+        {"name": "node_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "AgentIdRequest": {"kind": "object", "fields": [
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceTemplateGetRequest": {"kind": "object", "fields": [
+        {"name": "template_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionKeyRequest": {"kind": "object", "fields": [
+        {"name": "session_key", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionAttachRequest": {"kind": "object", "fields": [
+        {"name": "session_key", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionStatusRequest": {"kind": "object", "fields": [
+        {"name": "session_key", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionHistoryRequest": {"kind": "object", "fields": [
+        {"name": "agent_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "limit", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceCreateRequest": {"kind": "object", "fields": [
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "operator_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "access_policy", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectCreateRequest": {"kind": "object", "fields": [
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "operator_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "access_policy", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceUpdateRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "access_policy", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectUpdateRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "access_policy", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceMountSetRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "export_name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectMountSetRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "export_name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceMountRemoveRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "export_name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectMountRemoveRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "export_name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceBindSetRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bind_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "target_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectBindSetRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bind_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "target_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceBindRemoveRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bind_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectBindRemoveRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "bind_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceUpRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "access_policy", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "desired_mounts", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "desired_binds", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "activate", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectUpRequest": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "vision", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "status", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "template_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "access_policy", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "desired_mounts", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "desired_binds", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "activate", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceStatusRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ReconcileStatusRequest": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "VenomBindRequest": {"kind": "object", "fields": [
+        {"name": "venom_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "scope", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "agent_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceTemplateBind": {"kind": "object", "fields": [
+        {"name": "bind_path", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "venom_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "provider_scope", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceTemplate": {"kind": "object", "fields": [
+        {"name": "id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "description", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "binds", "type": "WorkspaceTemplateBind", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "WorkspaceTemplateListResponse": {"kind": "object", "fields": [
+        {"name": "templates", "type": "WorkspaceTemplate", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "WorkspaceTemplateGetResponse": {"kind": "object", "fields": [
+        {"name": "template", "type": "WorkspaceTemplate", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceListResponse": {"kind": "object", "fields": [
+        {"name": "workspaces", "type": "WorkspaceSummary", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "ProjectListResponse": {"kind": "object", "fields": [
+        {"name": "projects", "type": "ProjectSummary", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "WorkspaceMountListResponse": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mounts", "type": "MountView", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "ProjectMountListResponse": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mounts", "type": "MountView", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "WorkspaceBindListResponse": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "binds", "type": "BindView", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "ProjectBindListResponse": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "binds", "type": "BindView", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "WorkspaceDeleteResponse": {"kind": "object", "fields": [
+        {"name": "deleted", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": ["id", "project_id"]}
+      ]},
+    "ProjectDeleteResponse": {"kind": "object", "fields": [
+        {"name": "deleted", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": ["id", "workspace_id"]}
+      ]},
+    "WorkspaceTokenMutation": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "project_id"]},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": ["project_token"]},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "rotated", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "revoked", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectTokenMutation": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "workspace_id"]},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": ["workspace_token"]},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "rotated", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "revoked", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "DriftItem": {"kind": "object", "fields": [
+        {"name": "mount_path", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "severity", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "selected_node_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "desired_node_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "message", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []}
+      ]},
+    "DriftSummary": {"kind": "object", "fields": [
+        {"name": "count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "items", "type": "DriftItem", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "AvailabilitySummary": {"kind": "object", "fields": [
+        {"name": "mounts_total", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "online", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "degraded", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "missing", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceStatus": {"kind": "object", "fields": [
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": ["id", "project_id"]},
+        {"name": "workspace_root", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "mounts", "type": "MountView", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "desired_mounts", "type": "MountView", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "actual_mounts", "type": "MountView", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "drift", "type": "DriftSummary", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "availability", "type": "AvailabilitySummary", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "reconcile_state", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "last_reconcile_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "last_success_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "last_error", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "queue_depth", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectActivation": {"kind": "object", "fields": [
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id", "workspace_id"]},
+        {"name": "workspace_root", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []}
+      ]},
+    "SessionAttachState": {"kind": "object", "fields": [
+        {"name": "state", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "runtime_ready", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mount_ready", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "error_code", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "error_message", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "updated_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionStatusResponse": {"kind": "object", "fields": [
+        {"name": "session_key", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "attach", "type": "SessionAttachState", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionSummary": {"kind": "object", "fields": [
+        {"name": "session_key", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_id", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "last_active_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "message_count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "summary", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []}
+      ]},
+    "SessionListResponse": {"kind": "object", "fields": [
+        {"name": "active_session", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "sessions", "type": "SessionSummary", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "SessionCloseResponse": {"kind": "object", "fields": [
+        {"name": "session_key", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "closed", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "active_session", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "SessionRestoreResponse": {"kind": "object", "fields": [
+        {"name": "found", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "session", "type": "SessionSummary", "optional": true, "nullable": true, "is_array": false, "aliases": []}
+      ]},
+    "SessionHistoryResponse": {"kind": "object", "fields": [
+        {"name": "sessions", "type": "SessionSummary", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "ReconcileProjectStatus": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mounts", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "selected_mounts", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "online_mounts", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "degraded_mounts", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "missing_mounts", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "drift_count", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "queue_depth", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ReconcileStatusResponse": {"kind": "object", "fields": [
+        {"name": "reconcile_state", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "last_reconcile_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "last_success_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "last_error", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "queue_depth", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "failed_ops_total", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "cycles_total", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "failed_ops", "type": "string", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "projects", "type": "ReconcileProjectStatus", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "NodeInfo": {"kind": "object", "fields": [
+        {"name": "node_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "fs_url", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "joined_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "last_seen_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "lease_expires_at_ms", "type": "i64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "NodeListResponse": {"kind": "object", "fields": [
+        {"name": "nodes", "type": "NodeInfo", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "NodeGetResponse": {"kind": "object", "fields": [
+        {"name": "node", "type": "NodeInfo", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "AgentInfo": {"kind": "object", "fields": [
+        {"name": "agent_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": ["id"]},
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "description", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "is_default", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "identity_loaded", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "needs_hatching", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "capabilities", "type": "string", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "AgentListResponse": {"kind": "object", "fields": [
+        {"name": "agents", "type": "AgentInfo", "optional": false, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "AgentGetResponse": {"kind": "object", "fields": [
+        {"name": "agent", "type": "AgentInfo", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "WorkspaceUpResponse": {"kind": "object", "fields": [
+        {"name": "workspace_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace_token", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "created", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "activated", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace", "type": "AnyJson", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "ProjectUpResponse": {"kind": "object", "fields": [
+        {"name": "project_id", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "project_token", "type": "string", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "created", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "activated", "type": "boolean", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "workspace", "type": "AnyJson", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "AcheronAttachResponse": {"kind": "object", "fields": [
+        {"name": "layout", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "roots", "type": "string", "optional": true, "nullable": false, "is_array": true, "aliases": []}
+      ]},
+    "FsHelloRequest": {"kind": "object", "fields": [
+        {"name": "protocol", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "proto", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "auth_token", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_id", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "node_secret", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsHelloCapabilities": {"kind": "object", "fields": [
+        {"name": "exports", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "read", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "write", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsHelloResponse": {"kind": "object", "fields": [
+        {"name": "protocol", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "proto", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "capabilities", "type": "FsHelloCapabilities", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "caps", "type": "AnyJson", "optional": true, "nullable": true, "is_array": false, "aliases": []},
+        {"name": "node", "type": "AnyJson", "optional": true, "nullable": true, "is_array": false, "aliases": []}
+      ]},
+    "FsLookupRequest": {"kind": "object", "fields": [
+        {"name": "name", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsLookupResponse": {"kind": "object", "fields": [
+        {"name": "node", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "attr", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsGetattrResponse": {"kind": "object", "fields": [
+        {"name": "node", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "size", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mode", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "attr", "type": "AnyJson", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsReaddirpRequest": {"kind": "object", "fields": [
+        {"name": "cookie", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "count", "type": "u32", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "max", "type": "u32", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsDirEntry": {"kind": "object", "fields": [
+        {"name": "node", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "name", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "kind", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "size", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsReaddirpResponse": {"kind": "object", "fields": [
+        {"name": "entries", "type": "FsDirEntry", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "ents", "type": "FsDirEntry", "optional": true, "nullable": false, "is_array": true, "aliases": []},
+        {"name": "next", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "eof", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsOpenRequest": {"kind": "object", "fields": [
+        {"name": "mode", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "flags", "type": "u32", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsOpenResponse": {"kind": "object", "fields": [
+        {"name": "handle", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "mode", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "generation", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsReadRequest": {"kind": "object", "fields": [
+        {"name": "offset", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "count", "type": "u32", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsReadResponse": {"kind": "object", "fields": [
+        {"name": "data_b64", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "eof", "type": "boolean", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsWriteRequest": {"kind": "object", "fields": [
+        {"name": "offset", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "data_b64", "type": "string", "optional": false, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsWriteResponse": {"kind": "object", "fields": [
+        {"name": "count", "type": "u32", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "n", "type": "u32", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsInvalidateEvent": {"kind": "object", "fields": [
+        {"name": "node", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "what", "type": "string", "optional": true, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "gen", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]},
+    "FsInvalidateDirEvent": {"kind": "object", "fields": [
+        {"name": "dir", "type": "u64", "optional": false, "nullable": false, "is_array": false, "aliases": []},
+        {"name": "dir_gen", "type": "u64", "optional": true, "nullable": false, "is_array": false, "aliases": []}
+      ]}
   },
   "errors": {
     "control": {"type": "control.error", "fields": ["channel", "type", "id?", "ok=false", "error.code", "error.message"]},

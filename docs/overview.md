@@ -12,7 +12,8 @@ Official Zig module name:
 
 - Unified-v2 control parsing and envelope builders
 - Acheron runtime and node-FS message catalogs
-- Generated protocol specs, fixtures, and language constants under `sdk/`
+- Generated protocol specs, fixtures, and SDKs under `sdk/`
+- First-class TypeScript, Python, Go, and Rust SDK artifacts
 - WebSocket transport helpers
 - Node runtime components (fs node server + ops)
 - Service catalog and namespace runtime scaffolding
