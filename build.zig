@@ -33,6 +33,13 @@ pub fn build(b: *std.Build) void {
 
     const lib_tests = b.addTest(.{ .root_module = lib });
     const run_lib_tests = b.addRunArtifact(lib_tests);
+    const sdk_artifacts_module = b.createModule(.{
+        .root_source_file = b.path("src/sdk_artifacts.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const sdk_artifacts_tests = b.addTest(.{ .root_module = sdk_artifacts_module });
+    const run_sdk_artifacts_tests = b.addRunArtifact(sdk_artifacts_tests);
 
     const sync_sdk_module = b.createModule(.{
         .root_source_file = b.path("src/sdk_sync_main.zig"),
@@ -50,6 +57,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_lib_tests.step);
+    test_step.dependOn(&run_sdk_artifacts_tests.step);
 
     const sync_sdk_step = b.step("sync-sdk", "Generate protocol spec, fixtures, docs, and generated SDK constants");
     sync_sdk_step.dependOn(&run_sync_sdk.step);

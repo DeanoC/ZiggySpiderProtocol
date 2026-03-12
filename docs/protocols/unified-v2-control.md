@@ -67,9 +67,14 @@ This is the canonical control-plane reference for public Spiderweb clients. The 
 | `control.workspace_delete` | workspace | request |
 | `control.workspace_list` | workspace | request |
 | `control.workspace_get` | workspace | request |
+| `control.workspace_template_list` | workspace | request |
+| `control.workspace_template_get` | workspace | request |
 | `control.workspace_mount_set` | workspace | request |
 | `control.workspace_mount_remove` | workspace | request |
 | `control.workspace_mount_list` | workspace | request |
+| `control.workspace_bind_set` | workspace | request |
+| `control.workspace_bind_remove` | workspace | request |
+| `control.workspace_bind_list` | workspace | request |
 | `control.workspace_token_rotate` | workspace | request |
 | `control.workspace_token_revoke` | workspace | request |
 | `control.workspace_activate` | workspace | request |
