@@ -42,6 +42,26 @@ func TestValidateEnvelopeAcceptsTypedCorrelationFields(t *testing.T) {
 	}
 }
 
+func TestValidateEnvelopeAcceptsWorkspaceTemplateAndBindTypes(t *testing.T) {
+	t.Parallel()
+
+	for _, msgType := range []string{
+		"control.workspace_template_list",
+		"control.workspace_template_get",
+		"control.workspace_bind_set",
+		"control.workspace_bind_remove",
+		"control.workspace_bind_list",
+	} {
+		if err := ValidateEnvelope(map[string]any{
+			"channel": "control",
+			"type":    msgType,
+			"id":      "req-1",
+		}); err != nil {
+			t.Fatalf("expected valid control envelope for %s, got %v", msgType, err)
+		}
+	}
+}
+
 func assertProtocolErrorCode(t *testing.T, err error, want string) {
 	t.Helper()
 
