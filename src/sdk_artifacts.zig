@@ -93,6 +93,7 @@ const ArtifactKind = enum {
     py_generated,
     go_generated,
     rust_generated,
+    swift_generated,
 };
 
 const Artifact = struct {
@@ -139,6 +140,7 @@ const artifacts = [_]Artifact{
     .{ .kind = .py_generated, .rel_path = &.{ "sdk", "python", "spiderweb_protocol", "spiderweb_protocol", "generated.py" } },
     .{ .kind = .go_generated, .rel_path = &.{ "sdk", "go", "spiderwebprotocol", "generated.go" } },
     .{ .kind = .rust_generated, .rel_path = &.{ "sdk", "rust", "spiderweb-protocol", "src", "generated.rs" } },
+    .{ .kind = .swift_generated, .rel_path = &.{ "sdk", "swift", "SpiderwebProtocol", "Sources", "SpiderwebProtocol", "Generated.swift" } },
 };
 
 pub fn syncWorkspace(allocator: std.mem.Allocator) !void {
@@ -189,6 +191,7 @@ pub fn renderArtifact(allocator: std.mem.Allocator, kind: ArtifactKind) ![]u8 {
         .py_generated => renderPythonGenerated(allocator),
         .go_generated => renderGoGenerated(allocator),
         .rust_generated => renderRustGenerated(allocator),
+        .swift_generated => renderSwiftGenerated(allocator),
     };
 }
 
@@ -755,6 +758,46 @@ fn renderRustGenerated(allocator: std.mem.Allocator) ![]u8 {
     try writeRustSchemaTypes(writer);
     try writeRustControlEnums(writer);
     try writeRustAcheronEnums(writer);
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn renderSwiftGenerated(allocator: std.mem.Allocator) ![]u8 {
+    var out = std.ArrayListUnmanaged(u8){};
+    errdefer out.deinit(allocator);
+    const writer = out.writer(allocator);
+
+    try writer.writeAll("// Generated from src/sdk_artifacts.zig. Do not edit by hand.\n");
+    try writer.writeAll("import Foundation\n\n");
+    try writer.writeAll("public let controlProtocol = ");
+    try writeSwiftString(writer, control_protocol_name);
+    try writer.writeAll("\npublic let acheronRuntimeVersion = ");
+    try writeSwiftString(writer, acheron_runtime_version);
+    try writer.writeAll("\npublic let nodeFsProtocol = ");
+    try writeSwiftString(writer, node_fs_protocol_name);
+    try writer.print("\npublic let nodeFsProto: UInt32 = {d}\n\n", .{node_fs_protocol_proto});
+    try writer.writeAll("public let controlMessageTypes: [String] = [\n");
+    try writeSwiftMessageArray(writer, .control_all);
+    try writer.writeAll("]\n\npublic let acheronMessageTypes: [String] = [\n");
+    try writeSwiftMessageArray(writer, .acheron_all);
+    try writer.writeAll("]\n\npublic let runtimeAcheronMessageTypes: [String] = [\n");
+    try writeSwiftMessageArray(writer, .acheron_runtime_only);
+    try writer.writeAll("]\n\npublic let nodeFsAcheronMessageTypes: [String] = [\n");
+    try writeSwiftMessageArray(writer, .acheron_node_fs_only);
+    try writer.writeAll("]\n\npublic let legacyRejectedControlMessageTypes: [String] = [\n");
+    try writeSwiftStringArray(writer, &legacy_rejected_control_names, 1);
+    try writer.writeAll("]\n\npublic let legacyRejectedAcheronMessageTypes: [String] = [\n");
+    try writeSwiftStringArray(writer, &legacy_rejected_acheron_names, 1);
+    try writer.writeAll("]\n\npublic enum Channel: String, CaseIterable, Sendable {\n");
+    try writer.writeAll("    case control\n    case acheron\n}\n\n");
+    try writer.writeAll("public enum ProtocolEnvelopeRule: String, CaseIterable, Sendable {\n");
+    try writer.writeAll("    case channelRequired = \"channel-required\"\n");
+    try writer.writeAll("    case typeMustMatchChannel = \"type-must-match-channel\"\n");
+    try writer.writeAll("    case legacyNamesRejected = \"legacy-names-rejected\"\n");
+    try writer.writeAll("    case correlationByIdOrTag = \"correlation-by-id-or-tag\"\n");
+    try writer.writeAll("}\n\n");
+    try writer.writeAll("public let protocolEnvelopeRules: [ProtocolEnvelopeRule] = [\n");
+    try writer.writeAll("    .channelRequired,\n    .typeMustMatchChannel,\n    .legacyNamesRejected,\n    .correlationByIdOrTag,\n]\n");
 
     return out.toOwnedSlice(allocator);
 }
@@ -1564,6 +1607,53 @@ fn writeGoMessageArray(writer: anytype, comptime kind: GeneratedMessageArrayKind
     }
 }
 
+fn writeSwiftMessageArray(writer: anytype, comptime kind: GeneratedMessageArrayKind) !void {
+    switch (kind) {
+        .control_all => {
+            inline for (@typeInfo(unified.ControlType).@"enum".fields) |field| {
+                const value: unified.ControlType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                try writer.writeAll("    ");
+                try writeSwiftString(writer, unified.controlTypeName(value));
+                try writer.writeAll(",\n");
+            }
+        },
+        .acheron_all => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                try writer.writeAll("    ");
+                try writeSwiftString(writer, unified.acheronTypeName(value));
+                try writer.writeAll(",\n");
+            }
+        },
+        .acheron_runtime_only => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                const name = unified.acheronTypeName(value);
+                if (std.mem.eql(u8, acheronCategory(name), "runtime")) {
+                    try writer.writeAll("    ");
+                    try writeSwiftString(writer, name);
+                    try writer.writeAll(",\n");
+                }
+            }
+        },
+        .acheron_node_fs_only => {
+            inline for (@typeInfo(unified.FsrpcType).@"enum".fields) |field| {
+                const value: unified.FsrpcType = @enumFromInt(field.value);
+                if (value == .unknown) continue;
+                const name = unified.acheronTypeName(value);
+                if (std.mem.eql(u8, acheronCategory(name), "node_fs")) {
+                    try writer.writeAll("    ");
+                    try writeSwiftString(writer, name);
+                    try writer.writeAll(",\n");
+                }
+            }
+        },
+    }
+}
+
 fn writeStringArrayLines(writer: anytype, values: []const []const u8, indent_spaces: usize) !void {
     var index: usize = 0;
     while (index < values.len) : (index += 1) {
@@ -1595,6 +1685,14 @@ fn writeGoStringArray(writer: anytype, values: []const []const u8, indent_tabs: 
         var idx: usize = 0;
         while (idx < indent_tabs) : (idx += 1) try writer.writeByte('\t');
         try writeGoString(writer, value);
+        try writer.writeAll(",\n");
+    }
+}
+
+fn writeSwiftStringArray(writer: anytype, values: []const []const u8, indent_level: usize) !void {
+    for (values) |value| {
+        try writeIndent(writer, indent_level * 4);
+        try writeSwiftString(writer, value);
         try writer.writeAll(",\n");
     }
 }
@@ -1688,6 +1786,10 @@ fn writePythonString(writer: anytype, value: []const u8) !void {
 }
 
 fn writeGoString(writer: anytype, value: []const u8) !void {
+    try writeJsonString(writer, value);
+}
+
+fn writeSwiftString(writer: anytype, value: []const u8) !void {
     try writeJsonString(writer, value);
 }
 

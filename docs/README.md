@@ -22,3 +22,4 @@ Language SDKs live under:
 - `../sdk/python/spiderweb_protocol`
 - `../sdk/go/spiderwebprotocol`
 - `../sdk/rust/spiderweb-protocol`
+- `../sdk/swift/SpiderwebProtocol`

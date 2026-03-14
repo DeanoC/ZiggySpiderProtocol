@@ -9,6 +9,7 @@ Supported SDK artifact targets:
 - `sdk/python/spiderweb_protocol`
 - `sdk/go/spiderwebprotocol`
 - `sdk/rust/spiderweb-protocol`
+- `sdk/swift/SpiderwebProtocol`
 
 Official Zig module name:
 - `spider-protocol`
