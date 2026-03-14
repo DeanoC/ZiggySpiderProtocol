@@ -4140,6 +4140,8 @@ pub const NodeOps = struct {
         const node_id = req.node orelse return DispatchResult.failure(fs_protocol.Errno.EINVAL, "SETXATTR requires node");
         const name = fs_protocol.getRequiredString(req.args, "name") orelse return DispatchResult.failure(fs_protocol.Errno.EINVAL, "SETXATTR requires a.name");
         const value_b64 = fs_protocol.getRequiredString(req.args, "value_b64") orelse return DispatchResult.failure(fs_protocol.Errno.EINVAL, "SETXATTR requires a.value_b64");
+        // SETXATTR flags follow Linux xattr semantics across platforms:
+        // 1 => create-only, 2 => replace-only.
         const flags = fs_protocol.getOptionalU32(req.args, "flags", 0) catch return DispatchResult.failure(fs_protocol.Errno.EINVAL, "flags must be u32");
 
         const ctx = self.resolveNode(node_id) catch |err| return mapError(err);

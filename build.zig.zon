@@ -5,13 +5,13 @@
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
         .zwasm = .{
-            .url = "https://github.com/DeanoC/zwasm/archive/62fe06f44a26e091ffd8c17a32c727f6320b83c0.tar.gz",
-            .hash = "zwasm-1.5.0-IBbzF2OIIwASv9vXqr-jE7LDtT9HllJDYBESTG9RVjgR",
+            .path = "deps/zwasm",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "deps",
         "src",
         "README.md",
         "LICENSE",
