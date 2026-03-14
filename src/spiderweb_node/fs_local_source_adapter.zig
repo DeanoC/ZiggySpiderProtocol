@@ -88,6 +88,10 @@ pub const LockMode = enum {
     unlock,
 };
 
+const linux_xattr_create: u32 = 0x1;
+const linux_xattr_replace: u32 = 0x2;
+const linux_xattr_known_mask: u32 = linux_xattr_create | linux_xattr_replace;
+
 pub const LookupResult = struct {
     resolved_path: []u8,
     stat: std.fs.File.Stat,
@@ -298,7 +302,7 @@ pub fn setXattrAbsolute(
     flags: u32,
 ) !void {
     if (builtin.os.tag == .windows) return error.OperationNotSupported;
-    if (flags > std.math.maxInt(c_int)) return error.InvalidArgument;
+    const options = try mapSetxattrFlags(flags);
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
     const name_z = try allocator.dupeZ(u8, name);
@@ -307,15 +311,32 @@ pub fn setXattrAbsolute(
     while (true) {
         const value_ptr = if (value.len == 0) null else @as(?*const anyopaque, @ptrCast(value.ptr));
         const rc = if (builtin.os.tag == .macos)
-            c.setxattr(path_z.ptr, name_z.ptr, value_ptr, value.len, 0, @intCast(flags))
+            c.setxattr(path_z.ptr, name_z.ptr, value_ptr, value.len, 0, options)
         else
-            c.setxattr(path_z.ptr, name_z.ptr, value_ptr, value.len, @intCast(flags));
+            c.setxattr(path_z.ptr, name_z.ptr, value_ptr, value.len, options);
         switch (std.posix.errno(rc)) {
             .SUCCESS => return,
             .INTR => continue,
             else => |errno_no| return posixErrnoToError(errno_no),
         }
     }
+}
+
+fn mapSetxattrFlags(flags: u32) !c_int {
+    if (builtin.os.tag != .macos) {
+        if (flags > std.math.maxInt(c_int)) return error.InvalidArgument;
+        return @intCast(flags);
+    }
+
+    if ((flags & ~linux_xattr_known_mask) != 0) return error.InvalidArgument;
+    if ((flags & linux_xattr_create) != 0 and (flags & linux_xattr_replace) != 0) {
+        return error.InvalidArgument;
+    }
+
+    var options: c_int = 0;
+    if ((flags & linux_xattr_create) != 0) options |= c.XATTR_CREATE;
+    if ((flags & linux_xattr_replace) != 0) options |= c.XATTR_REPLACE;
+    return options;
 }
 
 pub fn getXattrAbsolute(allocator: std.mem.Allocator, path: []const u8, name: []const u8) ![]u8 {
@@ -473,6 +494,22 @@ test "fs_local_source_adapter: supportsOperationForKind reflects windows capabil
     try std.testing.expect(!supportsOperationForKind(.windows, .symlink));
     try std.testing.expect(!supportsOperationForKind(.windows, .getxattr));
     try std.testing.expect(supportsOperationForKind(.windows, .rename));
+}
+
+test "fs_local_source_adapter: setxattr flag mapping keeps protocol semantics" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    try std.testing.expectEqual(@as(c_int, 0), try mapSetxattrFlags(0));
+
+    if (builtin.os.tag == .macos) {
+        try std.testing.expectEqual(@as(c_int, c.XATTR_CREATE), try mapSetxattrFlags(linux_xattr_create));
+        try std.testing.expectEqual(@as(c_int, c.XATTR_REPLACE), try mapSetxattrFlags(linux_xattr_replace));
+        try std.testing.expectError(error.InvalidArgument, mapSetxattrFlags(linux_xattr_known_mask));
+        try std.testing.expectError(error.InvalidArgument, mapSetxattrFlags(0x4));
+    } else {
+        try std.testing.expectEqual(@as(c_int, @intCast(linux_xattr_create)), try mapSetxattrFlags(linux_xattr_create));
+        try std.testing.expectEqual(@as(c_int, @intCast(linux_xattr_replace)), try mapSetxattrFlags(linux_xattr_replace));
+    }
 }
 
 test "fs_local_source_adapter: isWithinRoot handles root and exact-prefix boundaries" {
