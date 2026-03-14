@@ -88,6 +88,8 @@ pub const LockMode = enum {
     unlock,
 };
 
+// SETXATTR uses Linux-style protocol flag values across platforms:
+// 1 => create-only, 2 => replace-only.
 const linux_xattr_create: u32 = 0x1;
 const linux_xattr_replace: u32 = 0x2;
 const linux_xattr_known_mask: u32 = linux_xattr_create | linux_xattr_replace;
@@ -328,6 +330,8 @@ fn mapSetxattrFlags(flags: u32) !c_int {
         return @intCast(flags);
     }
 
+    // Darwin's XATTR_* option bits differ from Linux, so preserve the
+    // protocol contract by translating the Linux-style values here.
     if ((flags & ~linux_xattr_known_mask) != 0) return error.InvalidArgument;
     if ((flags & linux_xattr_create) != 0 and (flags & linux_xattr_replace) != 0) {
         return error.InvalidArgument;
